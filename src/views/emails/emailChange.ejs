@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Confirm Your New Email</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f4f4;
+        margin: 0;
+        padding: 0;
+      }
+      .container {
+        max-width: 600px;
+        margin: 40px auto;
+        background-color: #ffffff;
+        padding: 32px;
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+      }
+      .title {
+        font-size: 24px;
+        margin-bottom: 12px;
+        color: #0ea5e9;
+      }
+      .otp {
+        display: inline-block;
+        margin: 24px 0;
+        padding: 16px 32px;
+        font-size: 28px;
+        letter-spacing: 6px;
+        font-weight: bold;
+        color: #0ea5e9;
+        background-color: #e0f2fe;
+        border-radius: 10px;
+      }
+      .footer {
+        margin-top: 32px;
+        font-size: 13px;
+        color: #94a3b8;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1 class="title">Confirm Your New Email</h1>
+      <p>Hi <%= name %>,</p>
+      <p>
+        We received a request to change the email address on your Happily Mart
+        account. Enter the verification code below in the app within the next 15
+        minutes to confirm this change.
+      </p>
+      <div class="otp"><%= otp %></div>
+      <p>
+        If you didn’t request this change, please ignore this email and secure
+        your account immediately.
+      </p>
+      <p class="footer">
+        © <%= new Date().getFullYear() %> Happily Mart. All rights reserved.
+      </p>
+    </div>
+  </body>
+</html>
+

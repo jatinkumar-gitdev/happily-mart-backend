@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Payment Receipt - Happily Mart</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        background-color: #f4f7fa;
+        padding: 20px;
+      }
+      .email-wrapper {
+        max-width: 650px;
+        margin: 0 auto;
+        background-color: #ffffff;
+      }
+      .header {
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+        color: white;
+        padding: 40px 30px;
+        text-align: center;
+        border-radius: 8px 8px 0 0;
+      }
+      .logo {
+        font-size: 32px;
+        font-weight: bold;
+        margin-bottom: 10px;
+        letter-spacing: 1px;
+      }
+      .header-subtitle {
+        font-size: 16px;
+        opacity: 0.95;
+        margin-top: 5px;
+      }
+      .success-badge {
+        display: inline-block;
+        background-color: #10b981;
+        color: white;
+        padding: 8px 20px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: 600;
+        margin-top: 15px;
+      }
+      .content {
+        padding: 40px 30px;
+      }
+      .greeting {
+        font-size: 18px;
+        color: #1f2937;
+        margin-bottom: 20px;
+      }
+      .message {
+        font-size: 15px;
+        color: #4b5563;
+        margin-bottom: 30px;
+        line-height: 1.7;
+      }
+      .invoice-box {
+        background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        border: 2px solid #0ea5e9;
+        border-radius: 12px;
+        padding: 25px;
+        margin: 30px 0;
+      }
+      .invoice-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+        border-bottom: 2px solid #0ea5e9;
+      }
+      .invoice-title {
+        font-size: 20px;
+        font-weight: bold;
+        color: #0369a1;
+      }
+      .invoice-number {
+        font-size: 14px;
+        color: #64748b;
+        font-weight: 600;
+      }
+      .details-grid {
+        display: grid;
+        gap: 15px;
+      }
+      .detail-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 12px 0;
+        border-bottom: 1px solid #cbd5e1;
+      }
+      .detail-row:last-child {
+        border-bottom: none;
+      }
+      .detail-label {
+        font-weight: 600;
+        color: #475569;
+        font-size: 14px;
+      }
+      .detail-value {
+        color: #1e293b;
+        font-weight: 500;
+        text-align: right;
+        font-size: 14px;
+        word-break: break-all;
+      }
+      .total-row {
+        background-color: #0ea5e9;
+        margin: 20px -25px -25px -25px;
+        padding: 20px 25px;
+        border-radius: 0 0 10px 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .total-label {
+        font-size: 18px;
+        font-weight: bold;
+        color: white;
+      }
+      .total-value {
+        font-size: 24px;
+        font-weight: bold;
+        color: white;
+      }
+      .download-section {
+        text-align: center;
+        margin: 35px 0;
+        padding: 30px;
+        background-color: #f8fafc;
+        border-radius: 10px;
+      }
+      .download-text {
+        font-size: 15px;
+        color: #475569;
+        margin-bottom: 20px;
+      }
+      .pdf-icon {
+        font-size: 48px;
+        margin-bottom: 15px;
+      }
+      .download-button {
+        display: inline-block;
+        background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+        color: white;
+        padding: 14px 35px;
+        text-decoration: none;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 16px;
+        box-shadow: 0 4px 6px rgba(14, 165, 233, 0.3);
+        transition: all 0.3s ease;
+      }
+      .download-button:hover {
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+        box-shadow: 0 6px 8px rgba(14, 165, 233, 0.4);
+        transform: translateY(-2px);
+      }
+      .attachment-note {
+        font-size: 13px;
+        color: #64748b;
+        margin-top: 15px;
+        font-style: italic;
+      }
+      .info-box {
+        background-color: #fef3c7;
+        border-left: 4px solid #f59e0b;
+        padding: 15px 20px;
+        margin: 25px 0;
+        border-radius: 4px;
+      }
+      .info-box p {
+        font-size: 14px;
+        color: #92400e;
+        margin: 5px 0;
+      }
+      .footer {
+        background-color: #f8fafc;
+        padding: 30px;
+        text-align: center;
+        border-radius: 0 0 8px 8px;
+        border-top: 1px solid #e2e8f0;
+      }
+      .company-info {
+        margin-bottom: 20px;
+      }
+      .company-name {
+        font-weight: bold;
+        font-size: 18px;
+        color: #0ea5e9;
+        margin-bottom: 8px;
+      }
+      .company-details {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .footer-text {
+        color: #64748b;
+        font-size: 13px;
+        margin: 8px 0;
+      }
+      .social-links {
+        margin-top: 20px;
+      }
+      .social-links a {
+        display: inline-block;
+        margin: 0 8px;
+        color: #0ea5e9;
+        text-decoration: none;
+        font-size: 14px;
+      }
+      .divider {
+        height: 1px;
+        background-color: #e2e8f0;
+        margin: 25px 0;
+      }
+      @media only screen and (max-width: 600px) {
+        .email-wrapper {
+          margin: 0;
+        }
+        .header,
+        .content,
+        .footer {
+          padding: 25px 20px;
+        }
+        .invoice-box {
+          padding: 20px 15px;
+        }
+        .detail-row {
+          flex-direction: column;
+          gap: 5px;
+        }
+        .detail-value {
+          text-align: left;
+        }
+        .total-row {
+          flex-direction: column;
+          gap: 10px;
+          text-align: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="email-wrapper">
+      <!-- Header Section -->
+      <div class="header">
+        <div class="logo">🛒 HAPPILY MART</div>
+        <div class="header-subtitle">Your Trusted Subscription Platform</div>
+        <div class="success-badge">✓ Payment Successful</div>
+      </div>
+
+      <!-- Content Section -->
+      <div class="content">
+        <div class="greeting">Hello <%= name %>,</div>
+
+        <div class="message">
+          Thank you for your subscription purchase! Your payment has been
+          successfully processed. We're excited to have you on board with the
+          <strong><%= planName %></strong> plan.
+        </div>
+
+        <!-- Invoice Box -->
+        <div class="invoice-box">
+          <div class="invoice-header">
+            <div class="invoice-title">📄 Payment Receipt</div>
+            <div class="invoice-number"><%= invoiceNumber %></div>
+          </div>
+
+          <div class="details-grid">
+            <div class="detail-row">
+              <span class="detail-label">Customer Name:</span>
+              <span class="detail-value"><%= name %></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Email Address:</span>
+              <span class="detail-value"><%= email %></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Payment Date:</span>
+              <span class="detail-value"><%= paymentDate %></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Transaction ID:</span>
+              <span class="detail-value"><%= transactionId %></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Subscription Plan:</span>
+              <span class="detail-value"><%= planName %></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Plan Price:</span>
+              <span class="detail-value"><%= price %></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">GST (18%):</span>
+              <span class="detail-value"><%= gst %></span>
+            </div>
+          </div>
+
+          <div class="total-row">
+            <span class="total-label">Total Amount Paid:</span>
+            <span class="total-value"><%= total %></span>
+          </div>
+        </div>
+
+        <!-- Download Section -->
+        <div class="download-section">
+          <div class="pdf-icon">📑</div>
+          <div class="download-text">
+            <strong>Your detailed invoice is attached to this email</strong>
+          </div>
+          <p class="attachment-note">
+            📎 Please check your email attachments for the PDF invoice:<br />
+            <strong>Invoice_<%= invoiceNumber %>.pdf</strong>
+          </p>
+        </div>
+
+        <!-- Info Box -->
+        <div class="info-box">
+          <p><strong>📌 Important Information:</strong></p>
+          <p>• Your subscription is now active and ready to use</p>
+          <p>• Keep this email and invoice for your records</p>
+          <p>• For any queries, contact our support team</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="message">
+          If you have any questions or need assistance, please don't hesitate to
+          reach out to our support team at
+          <a href="mailto:support@happilymart.com" style="color: #0ea5e9"
+            >support@happilymart.com</a
+          >
+        </div>
+      </div>
+
+      <!-- Footer Section -->
+      <div class="footer">
+        <div class="company-info">
+          <div class="company-name">Happily Mart Private Limited</div>
+          <div class="company-details">
+            123 Business Park, Tech Tower<br />
+            Mumbai, Maharashtra - 400001, India<br />
+            GSTIN: 27ABCDE1234F1Z5 | CIN: U74999MH2023PTC123456
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <p class="footer-text">
+          This is an automated email. Please do not reply to this message.
+        </p>
+        <p class="footer-text">
+          © <%= new Date().getFullYear() %> Happily Mart. All rights reserved.
+        </p>
+
+        <div class="social-links">
+          <a href="https://www.happilymart.com">Website</a> |
+          <a href="mailto:support@happilymart.com">Support</a> |
+          <a href="tel:+911800123456">+91-1800-123-4567</a>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
