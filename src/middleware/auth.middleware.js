@@ -4,7 +4,8 @@ const { verifyToken } = require("../config/jwt");
 
 const authenticate = async (req, res, next) => {
   try {
-    const token = req.cookies.accessToken || req.headers.authorization?.split(" ")[1];
+    // Check for accessToken in cookies or adminToken for admin users
+    const token = req.cookies.adminToken || req.cookies.accessToken || req.headers.authorization?.split(" ")[1];
 
     if (!token) {
       return res.status(401).json({ message: "Authentication required" });
@@ -38,5 +39,14 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-module.exports = { authenticate };
+const authorizeAdmin = (req, res, next) => {
+  if (req.user.role !== "admin") {
+    return res.status(403).json({
+      success: false,
+      message: "Access denied. Admin privileges required.",
+    });
+  }
+  next();
+};
 
+module.exports = { authenticate, authorizeAdmin };

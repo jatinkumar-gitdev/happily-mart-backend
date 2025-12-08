@@ -4,7 +4,7 @@ const subscriptionService = require("../services/subscription.service");
 const emailService = require("../services/email.service");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
-const redisService = require("../services/redis.service");
+const memcachedService = require("../services/memcached.service");
 
 // Initialize Razorpay
 let razorpay;
@@ -192,8 +192,8 @@ const verifySubscriptionPayment = asyncHandler(async (req, res) => {
   );
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
-  await redisService.del(`account_status_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
+  await memcachedService.del(`account_status_${req.user._id}`);
 
   // Send payment receipt email
   try {
@@ -276,8 +276,8 @@ const useCredit = asyncHandler(async (req, res) => {
   const result = await subscriptionService.useCredit(req.user._id, postId);
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
-  await redisService.del(`account_status_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
+  await memcachedService.del(`account_status_${req.user._id}`);
 
   res.json({
     success: true,

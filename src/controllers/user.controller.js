@@ -1,5 +1,7 @@
 const asyncHandler = require("../utils/asyncHandler");
 const User = require("../models/User.model");
+const Post = require("../models/Post.model");
+const Deal = require("../models/Deal.model");
 const { sanitizeUser, generateAlphaNumericOTP } = require("../utils/helpers");
 const bcrypt = require("bcryptjs");
 const fs = require("fs");
@@ -12,7 +14,7 @@ const accountService = require("../services/account.service");
 const {
   sendEmailChangeVerificationEmail,
 } = require("../services/email.service");
-const redisService = require("../services/redis.service");
+const memcachedService = require("../services/memcached.service");
 
 const PRESET_AVATARS = [
   "/avatars/avatar-1.png",
@@ -40,16 +42,56 @@ const removeExistingAvatarFile = (avatarPath) => {
 
 const getProfile = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id).select(
-    "+credits +unlockCredits +createCredits +subscriptionPlan +subscriptionExpiresAt"
+    "name email phone countryCode alternatePhone alternateCountryCode avatar role isDeactivated subscriptionPlan credits unlockCredits createCredits subscriptionExpiresAt designation alternateEmail companyName registrationNumber gstinNumber companyType companyStructure address1 alternateAddress country state city commodities sector subSector linkedin twitter website"
   );
   
+  // Get user activity stats
+  const [postsCount, unlockedCount, dealsCount] = await Promise.all([
+    Post.countDocuments({ author: req.user._id, isActive: true }),
+    Post.countDocuments({ 
+      "unlockedBy.user": req.user._id,
+      isActive: true 
+    }),
+    Deal.countDocuments({ 
+      $or: [
+        { unlocker: req.user._id },
+        { author: req.user._id }
+      ],
+      isActive: true 
+    })
+  ]);
+  
   const sanitizedUser = sanitizeUser(user);
-  // Include subscription details in profile
+  // Include all profile details in response
   sanitizedUser.credits = user.credits;
   sanitizedUser.unlockCredits = user.unlockCredits;
   sanitizedUser.createCredits = user.createCredits;
   sanitizedUser.subscriptionPlan = user.subscriptionPlan;
   sanitizedUser.subscriptionExpiresAt = user.subscriptionExpiresAt;
+  sanitizedUser.designation = user.designation;
+  sanitizedUser.alternateEmail = user.alternateEmail;
+  sanitizedUser.companyName = user.companyName;
+  sanitizedUser.registrationNumber = user.registrationNumber;
+  sanitizedUser.gstinNumber = user.gstinNumber;
+  sanitizedUser.companyType = user.companyType;
+  sanitizedUser.companyStructure = user.companyStructure;
+  sanitizedUser.address1 = user.address1;
+  sanitizedUser.alternateAddress = user.alternateAddress;
+  sanitizedUser.country = user.country;
+  sanitizedUser.state = user.state;
+  sanitizedUser.city = user.city;
+  sanitizedUser.commodities = user.commodities;
+  sanitizedUser.sector = user.sector;
+  sanitizedUser.subSector = user.subSector;
+  sanitizedUser.linkedin = user.linkedin;
+  sanitizedUser.twitter = user.twitter;
+  sanitizedUser.website = user.website;
+  
+  // Add activity stats
+  sanitizedUser.posts = postsCount;
+  sanitizedUser.unlocked = unlockedCount;
+  sanitizedUser.deals = dealsCount;
+  sanitizedUser.connections = 0; // Placeholder for future connections feature
   
   res.json({
     success: true,
@@ -129,8 +171,8 @@ const updateProfile = asyncHandler(async (req, res) => {
   await user.save();
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
-  await redisService.del(`account_status_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
+  await memcachedService.del(`account_status_${req.user._id}`);
 
   res.json({
     success: true,
@@ -162,7 +204,7 @@ const uploadAvatar = asyncHandler(async (req, res) => {
   );
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
 
   res.json({
     success: true,
@@ -187,7 +229,7 @@ const setPresetAvatar = asyncHandler(async (req, res) => {
   await user.save();
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
 
   res.json({
     success: true,
@@ -227,7 +269,7 @@ const changePassword = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, { password: hashedPassword });
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
 
   res.json({
     success: true,
@@ -252,8 +294,8 @@ const requestAccountDeletion = asyncHandler(async (req, res) => {
   );
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
-  await redisService.del(`account_status_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
+  await memcachedService.del(`account_status_${req.user._id}`);
 
   res.json({
     success: true,
@@ -265,8 +307,8 @@ const cancelAccountDeletion = asyncHandler(async (req, res) => {
   const result = await accountService.cancelAccountDeletion(req.user._id);
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
-  await redisService.del(`account_status_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
+  await memcachedService.del(`account_status_${req.user._id}`);
 
   res.json({
     success: true,
@@ -291,8 +333,8 @@ const deactivateAccount = asyncHandler(async (req, res) => {
   );
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
-  await redisService.del(`account_status_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
+  await memcachedService.del(`account_status_${req.user._id}`);
 
   res.json({
     success: true,
@@ -359,8 +401,8 @@ const verifyReactivationToken = asyncHandler(async (req, res) => {
 
   // Invalidate user cache if reactivation was successful
   if (result && result.user && result.user._id) {
-    await redisService.del(`user_${result.user._id}`);
-    await redisService.del(`account_status_${result.user._id}`);
+    await memcachedService.del(`user_${result.user._id}`);
+    await memcachedService.del(`account_status_${result.user._id}`);
   }
 
   res.json({
@@ -420,7 +462,7 @@ const verifyEmailChange = asyncHandler(async (req, res) => {
   await user.save();
 
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
 
   res.json({
     success: true,

@@ -4,7 +4,7 @@ const {
 } = require("../models/Subscription.model");
 const User = require("../models/User.model");
 const Payment = require("../models/Payment.model");
-const redisService = require("./redis.service");
+const memcachedService = require("./memcached.service");
 
 // Subscription plan configurations
 const SUBSCRIPTION_PLANS = {
@@ -112,11 +112,11 @@ const initializeSubscriptionPlans = async () => {
 
       // Invalidate cache when plans are updated
       const cacheKey = `subscription_plan_${planData.name}`;
-      await redisService.del(cacheKey);
+      await memcachedService.del(cacheKey);
     }
 
     // Invalidate all plans cache
-    await redisService.del("subscription_plans");
+    await memcachedService.del("subscription_plans");
 
     console.log("Subscription plans initialized successfully");
   } catch (error) {
@@ -127,7 +127,7 @@ const initializeSubscriptionPlans = async () => {
 const getAllPlans = async () => {
   // Try to get from cache first
   const cacheKey = "subscription_plans";
-  const cachedPlans = await redisService.get(cacheKey);
+  const cachedPlans = await memcachedService.get(cacheKey);
 
   if (cachedPlans) {
     return cachedPlans;
@@ -146,7 +146,7 @@ const getAllPlans = async () => {
   );
 
   // Cache for 1 hour
-  await redisService.set(cacheKey, plainPlans, 3600);
+  await memcachedService.set(cacheKey, plainPlans, 3600);
 
   return plans;
 };
@@ -154,7 +154,7 @@ const getAllPlans = async () => {
 const getPlanByName = async (planName) => {
   // Try to get from cache first
   const cacheKey = `subscription_plan_${planName}`;
-  const cachedPlan = await redisService.get(cacheKey);
+  const cachedPlan = await memcachedService.get(cacheKey);
 
   if (cachedPlan) {
     return cachedPlan;
@@ -168,7 +168,7 @@ const getPlanByName = async (planName) => {
 
   // Cache for 1 hour
   if (plan) {
-    await redisService.set(cacheKey, plan, 3600);
+    await memcachedService.set(cacheKey, plan, 3600);
   }
 
   return plan;
@@ -293,12 +293,14 @@ const useCredit = async (userId, postId) => {
     throw new Error("Your subscription has expired. Please renew to continue.");
   }
 
+  // Check if user has sufficient unlock credits
   if (user.unlockCredits < 1) {
     throw new Error(
       "Insufficient unlock credits. Please purchase a plan to get more credits."
     );
   }
 
+  // Deduct credits
   user.unlockCredits -= 1;
   user.credits -= 1; // Also deduct from general credits for backward compatibility
   await user.save();

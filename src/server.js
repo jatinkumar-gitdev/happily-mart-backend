@@ -30,11 +30,13 @@ if (missingVars.length > 0) {
 
 // Initialize scheduled jobs
 const { initializeAccountDeletionJob } = require("./jobs/accountDeletion.job");
+const { scheduleDealReminders } = require("./jobs/dealReminders.job");
 const {
   initializeSubscriptionPlans,
 } = require("./services/subscription.service");
 
 initializeAccountDeletionJob();
+scheduleDealReminders();
 
 // Initialize subscription plans
 initializeSubscriptionPlans();

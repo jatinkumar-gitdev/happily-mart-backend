@@ -188,6 +188,58 @@ const userSchema = new mongoose.Schema(
     subscriptionPurchasedAt: {
       type: Date,
     },
+    creditsHistory: [
+      {
+        amount: {
+          type: Number,
+          required: true,
+        },
+        type: {
+          type: String,
+          enum: ["bonus", "penalty", "purchase", "used"],
+          required: true,
+        },
+        description: {
+          type: String,
+          required: true,
+        },
+        relatedEntity: {
+          type: String, // Could be dealId, postId, etc.
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+    
+    // Track total penalties for analytics
+    totalPenalties: {
+      type: Number,
+      default: 0,
+    },
+    
+    // User notifications
+    notifications: [
+      {
+        title: {
+          type: String,
+          required: true,
+        },
+        message: {
+          type: String,
+          required: true,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+        isRead: {
+          type: Boolean,
+          default: false,
+        },
+      },
+    ],
   },
   {
     timestamps: true,
@@ -206,5 +258,11 @@ userSchema.pre("save", async function (next) {
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
+
+// Compound indexes for common query patterns
+userSchema.index({ email: 1 });
+userSchema.index({ isDeactivated: 1, createdAt: -1 });
+userSchema.index({ subscriptionPlan: 1, subscriptionExpiresAt: 1 });
+userSchema.index({ role: 1, isDeactivated: 1 });
 
 module.exports = mongoose.model("User", userSchema);

@@ -5,7 +5,7 @@ const {
   sendPasswordResetEmail,
   sendReactivationEmail,
 } = require("./email.service");
-const redisService = require("./redis.service");
+const memcachedService = require("./memcached.service");
 
 /**
  * Request account deletion - schedules deletion after 7 days
@@ -240,13 +240,15 @@ const handleForgotPasswordForDeletion = async (email) => {
 const getAccountStatus = async (userId) => {
   // Try to get from cache first
   const cacheKey = `account_status_${userId}`;
-  const cachedStatus = await redisService.get(cacheKey);
+  const cachedStatus = await memcachedService.get(cacheKey);
 
   if (cachedStatus) {
     return cachedStatus;
   }
 
-  const user = await User.findById(userId);
+  const user = await User.findById(userId).select(
+    "isDeactivated deactivationReason deletionRequestedAt deletionScheduledFor"
+  );
   if (!user) {
     throw new Error("User not found");
   }
@@ -273,7 +275,7 @@ const getAccountStatus = async (userId) => {
   };
 
   // Cache for 5 minutes
-  await redisService.set(cacheKey, status, 300);
+  await memcachedService.set(cacheKey, status, 300);
 
   return status;
 };

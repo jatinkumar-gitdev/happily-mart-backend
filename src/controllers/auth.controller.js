@@ -5,7 +5,7 @@ const User = require("../models/User.model");
 const { generateAccessToken } = require("../config/jwt");
 const asyncHandler = require("../utils/asyncHandler");
 const { verifyRecaptcha } = require("../utils/recaptcha");
-const redisService = require("../services/redis.service");
+const memcachedService = require("../services/memcached.service");
 
 const signup = asyncHandler(async (req, res) => {
   try {
@@ -49,10 +49,9 @@ const verifyOTP = asyncHandler(async (req, res) => {
 });
 
 const login = asyncHandler(async (req, res) => {
-  const { email, password, rememberMe, recaptchaToken } = req.body;
+  const { email, password, rememberMe, recaptchaToken, isAdmin } = req.body;
   try {
-    // Verify reCAPTCHA if token provided
-    if (recaptchaToken) {
+    if (recaptchaToken && !isAdmin) {
       const isValid = await verifyRecaptcha(recaptchaToken);
       if (!isValid) {
         return res.status(400).json({
@@ -63,10 +62,38 @@ const login = asyncHandler(async (req, res) => {
     }
 
     const result = await authService.login(email, password, rememberMe);
-    setRefreshTokenCookie(res, result.refreshToken, rememberMe);
-    res.json({ success: true, ...result });
+    
+    if (isAdmin && result.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Admin privileges required.",
+      });
+    }
+    
+    setRefreshTokenCookie(res, result.refreshToken, rememberMe, isAdmin);
+    
+    let responseData = {
+      success: true,
+      user: result.user,
+      isAdmin: result.user.role === "admin",
+    };
+
+    if (isAdmin && result.user.role === "admin") {
+      const adminToken = generateAccessToken(result.user._id);
+      res.cookie("adminToken", adminToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000,
+        path: "/",
+      });
+      responseData.accessToken = adminToken;
+    } else {
+      responseData.accessToken = result.accessToken;
+    }
+    
+    res.json(responseData);
   } catch (error) {
-    // Handle specific authentication errors
     if (
       error.message === "Invalid credentials" ||
       error.message === "Password is required" ||
@@ -101,30 +128,57 @@ const resetPassword = asyncHandler(async (req, res) => {
 
 const refreshToken = asyncHandler(async (req, res) => {
   const refreshToken = req.cookies.refreshToken;
+  const adminRefreshToken = req.cookies.adminRefreshToken;
+  
+  // Check for admin refresh token first
+  if (adminRefreshToken) {
+    try {
+      const decoded = jwt.verify(adminRefreshToken, process.env.JWT_REFRESH_SECRET);
+      const user = await User.findById(decoded.userId);
+
+      if (!user || user.role !== "admin") {
+        return res.status(401).json({ message: "Invalid admin refresh token" });
+      }
+
+      const accessToken = generateAccessToken(user._id);
+      res.json({ success: true, accessToken });
+      return;
+    } catch (error) {
+      return res.status(401).json({ message: "Invalid admin refresh token" });
+    }
+  }
+  
+  // Fall back to regular refresh token
   if (!refreshToken) {
     return res.status(401).json({ message: "Refresh token required" });
   }
 
-  const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-  const user = await User.findById(decoded.userId);
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    const user = await User.findById(decoded.userId);
 
-  if (!user) {
+    if (!user) {
+      return res.status(401).json({ message: "Invalid refresh token" });
+    }
+
+    const accessToken = generateAccessToken(user._id);
+    res.json({ success: true, accessToken });
+  } catch (error) {
     return res.status(401).json({ message: "Invalid refresh token" });
   }
-
-  const accessToken = generateAccessToken(user._id);
-  res.json({ success: true, accessToken });
 });
 
 const logout = asyncHandler(async (req, res) => {
   res.clearCookie("refreshToken");
+  res.clearCookie("adminToken");
+  res.clearCookie("adminRefreshToken");
   res.json({ success: true, message: "Logged out successfully" });
 });
 
 const getMe = asyncHandler(async (req, res) => {
   // Try to get from cache first
   const cacheKey = `user_${req.user._id}`;
-  const cachedUser = await redisService.get(cacheKey);
+  const cachedUser = await memcachedService.get(cacheKey);
 
   if (cachedUser) {
     return res.json({ success: true, user: cachedUser });
@@ -136,7 +190,7 @@ const getMe = asyncHandler(async (req, res) => {
   const sanitizedUser = sanitizeUser(user);
 
   // Cache for 5 minutes
-  await redisService.set(cacheKey, sanitizedUser, 300);
+  await memcachedService.set(cacheKey, sanitizedUser, 300);
 
   res.json({ success: true, user: sanitizedUser });
 });

@@ -1,5 +1,6 @@
 const accountService = require("../services/account.service");
 const User = require("../models/User.model");
+const Post = require("../models/Post.model");
 
 /**
  * Scheduled job to delete accounts that have passed the 7-day grace period
@@ -21,18 +22,34 @@ const processAccountDeletions = async () => {
     let deletedCount = 0;
     let errorCount = 0;
 
-    for (const user of usersToDelete) {
-      try {
-        await accountService.deleteAccountPermanently(user._id);
-        deletedCount++;
-        console.log(`[Account Deletion Job] Deleted account: ${user.email}`);
-      } catch (error) {
-        errorCount++;
-        console.error(
-          `[Account Deletion Job] Error deleting account ${user.email}:`,
-          error.message
-        );
-      }
+    // Process deletions in batches for better performance
+    const batchSize = 100;
+    for (let i = 0; i < usersToDelete.length; i += batchSize) {
+      const batch = usersToDelete.slice(i, i + batchSize);
+      
+      // Process batch in parallel
+      const deletionPromises = batch.map(async (user) => {
+        try {
+          // Use bulk operations for deleting user posts
+          await Post.deleteMany({ author: user._id });
+          
+          // Delete user account
+          await User.deleteOne({ _id: user._id });
+          
+          console.log(`[Account Deletion Job] Deleted account: ${user.email}`);
+          return { success: true };
+        } catch (error) {
+          console.error(
+            `[Account Deletion Job] Error deleting account ${user.email}:`,
+            error.message
+          );
+          return { success: false, error: error.message };
+        }
+      });
+      
+      const results = await Promise.all(deletionPromises);
+      deletedCount += results.filter(r => r.success).length;
+      errorCount += results.filter(r => !r.success).length;
     }
 
     console.log(

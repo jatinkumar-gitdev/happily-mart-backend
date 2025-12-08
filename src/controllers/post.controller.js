@@ -1,18 +1,20 @@
 const asyncHandler = require("../utils/asyncHandler");
 const Post = require("../models/Post.model");
 const User = require("../models/User.model");
+const Deal = require("../models/Deal.model");
 const { sanitizeUser } = require("../utils/helpers");
 const subscriptionService = require("../services/subscription.service");
-const redisService = require("../services/redis.service");
+const memcachedService = require("../services/memcached.service");
+const { createDeal } = require("./deal.controller");
 
 const createPost = asyncHandler(async (req, res) => {
-  const { title, requirement, description, category, subcategory } = req.body;
+  const { title, requirement, description, category, subcategory, quantity, unit, hsnCode } = req.body;
 
-  if (!title || !requirement || !description || !category || !subcategory) {
+  if (!title || !requirement || !description || !category || !subcategory || !quantity || !unit || !hsnCode) {
     return res.status(400).json({
       success: false,
       message:
-        "Title, requirement, description, category, and subcategory are required",
+        "Title, requirement, description, category, subcategory, quantity, unit, and HSN code are required",
     });
   }
 
@@ -47,6 +49,9 @@ const createPost = asyncHandler(async (req, res) => {
     title,
     requirement,
     description,
+    quantity,
+    unit,
+    hsnCode,
     category,
     subcategory,
     images,
@@ -60,18 +65,28 @@ const createPost = asyncHandler(async (req, res) => {
 
   await post.populate("author", "name email phone avatar companyName");
 
-  // Invalidate all posts cache keys
-  const keys = await redisService.keys("posts_*");
-  if (keys && keys.length > 0) {
-    await Promise.all(keys.map(key => redisService.del(key)));
+  // Build proper post response with unlock status
+  const postResponse = buildPostResponse([post], req.user._id)[0];
+
+  // Invalidate all posts cache by using a more reliable approach
+  // Since Memcached doesn't support pattern-based key deletion,
+  // we'll invalidate specific commonly used cache keys
+  
+  // Invalidate paginated posts cache (pages 1-10 should cover most cases)
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6`); // 6 is the default limit
+    await memcachedService.del(`posts_${i}_10`); // 10 is another common limit
   }
   
   // Invalidate user cache
-  await redisService.del(`user_${req.user._id}`);
+  await memcachedService.del(`user_${req.user._id}`);
+  
+  // Small delay to ensure cache is cleared before responding
+  await new Promise(resolve => setTimeout(resolve, 100));
 
   res.status(201).json({ 
     success: true, 
-    post,
+    post: postResponse,
     remainingCreateCredits: user.createCredits,
     remainingCredits: user.credits,
   });
@@ -97,7 +112,7 @@ const buildPostResponse = (posts, userId) => {
       // Keep full description and author details
     } else if (userId) {
       // Other user's post - check if unlocked
-      postObj.isUnlocked = post.unlockedBy.some(
+      postObj.isUnlocked = post.unlockedBy && post.unlockedBy.some(
         (unlock) => unlock.user.toString() === userId.toString()
       );
       postObj.isOwnPost = false;
@@ -126,7 +141,7 @@ const getPosts = asyncHandler(async (req, res) => {
 
   // Try to get from cache first
   const cacheKey = `posts_${page}_${limit}`;
-  const cachedResult = await redisService.get(cacheKey);
+  const cachedResult = await memcachedService.get(cacheKey);
 
   if (cachedResult) {
     return res.json({
@@ -136,6 +151,7 @@ const getPosts = asyncHandler(async (req, res) => {
   }
 
   const posts = await Post.find({ isActive: true })
+    .select("title requirement description category subcategory images author likes favorites shares comments createdAt unlockedBy")
     .populate(
       "author",
       "name email phone avatar companyName designation country state city isDeactivated"
@@ -158,7 +174,7 @@ const getPosts = asyncHandler(async (req, res) => {
   };
 
   // Cache for 5 minutes
-  await redisService.set(cacheKey, result, 300);
+  await memcachedService.set(cacheKey, result, 300);
 
   res.json({
     success: true,
@@ -219,7 +235,7 @@ const getPostById = asyncHandler(async (req, res) => {
     postObj.isUnlocked = true;
     postObj.isOwnPost = true;
   } else if (userId) {
-    postObj.isUnlocked = post.unlockedBy.some(
+    postObj.isUnlocked = post.unlockedBy && post.unlockedBy.some(
       (unlock) => unlock.user.toString() === userId.toString()
     );
     postObj.isOwnPost = false;
@@ -256,10 +272,10 @@ const likePost = asyncHandler(async (req, res) => {
 
   await post.save();
 
-  // Invalidate all posts cache keys
-  const keys = await redisService.keys("posts_*");
-  if (keys && keys.length > 0) {
-    await Promise.all(keys.map(key => redisService.del(key)));
+  // Invalidate all posts cache by using a more reliable approach
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
   }
 
   res.json({ success: true, likes: post.likes.length, isLiked: !isLiked });
@@ -286,10 +302,10 @@ const favoritePost = asyncHandler(async (req, res) => {
 
   await post.save();
 
-  // Invalidate all posts cache keys
-  const keys = await redisService.keys("posts_*");
-  if (keys && keys.length > 0) {
-    await Promise.all(keys.map(key => redisService.del(key)));
+  // Invalidate all posts cache by using a more reliable approach
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
   }
 
   res.json({
@@ -308,6 +324,7 @@ const getFavoritePosts = asyncHandler(async (req, res) => {
     isActive: true,
     favorites: userId,
   })
+    .select("title requirement description category subcategory images author likes favorites shares comments createdAt unlockedBy")
     .populate(
       "author",
       "name email phone avatar companyName designation country state city isDeactivated"
@@ -343,10 +360,10 @@ const sharePost = asyncHandler(async (req, res) => {
   post.shares += 1;
   await post.save();
 
-  // Invalidate all posts cache keys
-  const keys = await redisService.keys("posts_*");
-  if (keys && keys.length > 0) {
-    await Promise.all(keys.map(key => redisService.del(key)));
+  // Invalidate all posts cache by using a more reliable approach
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
   }
 
   res.json({ success: true, shares: post.shares });
@@ -376,10 +393,10 @@ const addComment = asyncHandler(async (req, res) => {
   await post.save();
   await post.populate("comments.user", "name avatar");
 
-  // Invalidate all posts cache keys
-  const keys = await redisService.keys("posts_*");
-  if (keys && keys.length > 0) {
-    await Promise.all(keys.map(key => redisService.del(key)));
+  // Invalidate all posts cache by using a more reliable approach
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
   }
 
   const newComment = post.comments[post.comments.length - 1];
@@ -417,6 +434,7 @@ const searchPosts = asyncHandler(async (req, res) => {
       { description: searchRegex },
     ],
   })
+    .select("title requirement description category subcategory images author likes favorites shares comments createdAt unlockedBy")
     .populate(
       "author",
       "name email phone avatar companyName designation country state city isDeactivated"
@@ -450,15 +468,18 @@ const searchPosts = asyncHandler(async (req, res) => {
 const unlockPost = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const post = await Post.findById(id).populate(
+  // Fetch post with author details
+  let post = await Post.findById(id).populate(
     "author",
     "name email phone avatar companyName designation country state city isDeactivated"
   );
 
+  // Validate post existence
   if (!post) {
     return res.status(404).json({ success: false, message: "Post not found" });
   }
 
+  // Validate post author availability
   if (!post.author || post.author.isDeactivated) {
     return res.status(404).json({
       success: false,
@@ -468,16 +489,16 @@ const unlockPost = asyncHandler(async (req, res) => {
 
   const userId = req.user._id;
 
-  // Check if user is the author
+  // Prevent authors from unlocking their own posts (should already be unlocked)
   if (post.author._id.toString() === userId.toString()) {
     return res.status(400).json({
       success: false,
-      message: "You cannot unlock your own post",
+      message: "You cannot unlock your own post as it's already unlocked for you.",
     });
   }
 
-  // Check if already unlocked
-  const alreadyUnlocked = post.unlockedBy.some(
+  // Check if user has already unlocked this post
+  const alreadyUnlocked = post.unlockedBy && post.unlockedBy.some(
     (unlock) => unlock.user.toString() === userId.toString()
   );
 
@@ -488,36 +509,86 @@ const unlockPost = asyncHandler(async (req, res) => {
     });
   }
 
-  // Use credit to unlock
-  const creditResult = await subscriptionService.useCredit(userId, id);
+  try {
+    // Use credit to unlock the post
+    const creditResult = await subscriptionService.useCredit(userId, id);
 
-  // Add user to unlockedBy array
-  post.unlockedBy.push({
-    user: userId,
-    unlockedAt: new Date(),
-  });
-  await post.save();
+    // Atomically check and add user to unlockedBy array to prevent race conditions
+    const updatedPost = await Post.findOneAndUpdate(
+      { 
+        _id: id, 
+        "unlockedBy.user": { $ne: userId } // Ensure user hasn't already unlocked
+      },
+      { 
+        $push: { 
+          unlockedBy: { 
+            user: userId, 
+            unlockedAt: new Date() 
+          } 
+        } 
+      },
+      { new: true }
+    );
 
-  // Invalidate all posts cache keys
-  const keys = await redisService.keys("posts_*");
-  if (keys && keys.length > 0) {
-    await Promise.all(keys.map(key => redisService.del(key)));
+    // If no document was modified, user has already unlocked the post
+    if (!updatedPost) {
+      return res.status(400).json({
+        success: false,
+        message: "You have already unlocked this post",
+      });
+    }
+
+    // Update the post reference
+    post = updatedPost;
+    
+    // Create a deal for this unlock
+    try {
+      await createDeal(post._id, userId, post.author._id);
+    } catch (dealError) {
+      console.error("Error creating deal:", dealError);
+      // Don't fail the unlock if deal creation fails
+    }
+
+    // Invalidate cache to ensure fresh data
+    for (let i = 1; i <= 10; i++) {
+      await memcachedService.del(`posts_${i}_6`);
+      await memcachedService.del(`posts_${i}_10`);
+    }
+    
+    // Also invalidate user cache to update credits
+    await memcachedService.del(`user_${userId}`);
+
+    // Prepare response data
+    const postObj = post.toObject();
+    postObj.isUnlocked = true;
+    postObj.creditCost = 1;
+
+    res.json({
+      success: true,
+      message: `Post unlocked successfully! You have ${creditResult.remainingUnlockCredits} unlock credit${creditResult.remainingUnlockCredits !== 1 ? 's' : ''} remaining.`,
+      post: postObj,
+      remainingCredits: creditResult.remainingCredits,
+      remainingUnlockCredits: creditResult.remainingUnlockCredits,
+    });
+  } catch (error) {
+    // Handle credit-related errors specifically
+    if (error.message.includes("subscription has expired")) {
+      return res.status(403).json({
+        success: false,
+        message: "Your subscription has expired. Please renew to continue.",
+      });
+    }
+    
+    if (error.message.includes("insufficient")) {
+      return res.status(403).json({
+        success: false,
+        message: "Insufficient unlock credits. Please purchase a plan to get more credits.",
+      });
+    }
+    
+    // Re-throw other errors
+    throw error;
   }
-  
-  // Also invalidate user cache to update credits
-  await redisService.del(`user_${userId}`);
-
-  const postObj = post.toObject();
-  postObj.isUnlocked = true;
-  postObj.creditCost = 1;
-
-  res.json({
-    success: true,
-    message: `Post unlocked! Remaining: ${creditResult.remainingUnlockCredits} unlock credit${creditResult.remainingUnlockCredits !== 1 ? 's' : ''}`,
-    post: postObj,
-    remainingCredits: creditResult.remainingCredits,
-    remainingUnlockCredits: creditResult.remainingUnlockCredits,
-  });
 });
 
 module.exports = {

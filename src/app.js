@@ -13,6 +13,9 @@ const userRoutes = require("./routes/user.routes");
 const postRoutes = require("./routes/post.routes");
 const paymentRoutes = require("./routes/payment.routes");
 const subscriptionRoutes = require("./routes/subscription.routes");
+const dealRoutes = require("./routes/deal.routes");
+const adminRoutes = require("./routes/admin.routes");
+const notificationRoutes = require("./routes/notification.routes");
 
 const app = express();
 
@@ -22,7 +25,7 @@ connectDB();
 // Middleware
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: [process.env.FRONTEND_URL || "http://localhost:3000", "http://localhost:3001"],
     credentials: true,
   })
 );
@@ -60,6 +63,9 @@ app.use("/api/user", userRoutes);
 app.use("/api/posts", postRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
+app.use("/api/deals", dealRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 app.use(errorHandler);
 
