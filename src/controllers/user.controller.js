@@ -49,7 +49,7 @@ const getProfile = asyncHandler(async (req, res) => {
   const [postsCount, unlockedCount, dealsCount] = await Promise.all([
     Post.countDocuments({ author: req.user._id, isActive: true }),
     Post.countDocuments({ 
-      "unlockedBy.user": req.user._id,
+      "unlockedBy.prospect": req.user._id,
       isActive: true 
     }),
     Deal.countDocuments({ 
@@ -471,6 +471,112 @@ const verifyEmailChange = asyncHandler(async (req, res) => {
   });
 });
 
+// Get user's deals workspace and history
+const getUserDealsWorkspace = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
+  const user = await User.findById(userId).select("dealsWorkspace badges");
+
+  if (!user) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found",
+    });
+  }
+
+  const dealsWorkspace = user.dealsWorkspace || {
+    totalDeals: 0,
+    wonDeals: 0,
+    failedDeals: 0,
+    pendingDeals: 0,
+    history: []
+  };
+
+  const badges = user.badges || {
+    totalWonDeals: 0,
+    earnedBadges: []
+  };
+
+  // Fetch associated posts for detailed history
+  const Post = require("../models/Post.model");
+  const postIds = dealsWorkspace.history.map(h => h.postId);
+  const posts = await Post.find({ _id: { $in: postIds } }).select("title category createdAt");
+  
+  const enrichedHistory = dealsWorkspace.history.map(h => {
+    const post = posts.find(p => p._id.toString() === h.postId.toString());
+    return {
+      ...h,
+      postTitle: post?.title || "Deleted Post",
+      postCategory: post?.category || "",
+    };
+  });
+
+  res.json({
+    success: true,
+    dealsWorkspace: {
+      ...dealsWorkspace,
+      history: enrichedHistory
+    },
+    badges,
+  });
+});
+
+// Get user's posts with deal statistics
+const getUserPostsWithStats = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 10, status = "all" } = req.query;
+  const userId = req.user._id;
+  const skip = (page - 1) * limit;
+
+  const Post = require("../models/Post.model");
+
+  // Build query
+  const query = { author: userId };
+  
+  // Filter by deal result if specified
+  if (status && status !== 'all') {
+    if (['Won', 'Failed', 'Pending'].includes(status)) {
+      query.dealResult = status;
+    }
+  }
+
+  // Get paginated posts with stats
+  const posts = await Post.find(query)
+    .select("title category unlockedDetailCount contactCount dealToggleStatus dealResult wonCount validityPeriod expiresAt postStatus createdAt")
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(parseInt(limit));
+
+  const total = await Post.countDocuments(query);
+
+  // Format response
+  const postsWithStats = posts.map(post => ({
+    _id: post._id,
+    title: post.title,
+    category: post.category,
+    unlockedDetailCount: post.unlockedDetailCount || 0,
+    contactCount: post.contactCount || 0,
+    dealToggleStatus: post.dealToggleStatus || "Pending",
+    dealResult: post.dealResult || "Pending",
+    wonCount: post.wonCount || 0,
+    validityPeriod: post.validityPeriod,
+    expiresAt: post.expiresAt,
+    postStatus: post.postStatus,
+    isExpired: post.expiresAt && new Date() > post.expiresAt,
+    createdAt: post.createdAt,
+  }));
+
+  res.json({
+    success: true,
+    posts: postsWithStats,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / limit),
+    },
+  });
+});
+
 module.exports = {
   getProfile,
   updateProfile,
@@ -485,6 +591,8 @@ module.exports = {
   requestAccountReactivation,
   verifyReactivationToken,
   verifyEmailChange,
+  getUserDealsWorkspace,
+  getUserPostsWithStats,
   avatarUpload,
   handleMulterError,
   PRESET_AVATARS,

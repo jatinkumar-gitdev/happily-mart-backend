@@ -240,6 +240,63 @@ const userSchema = new mongoose.Schema(
         },
       },
     ],
+
+    // Achievement badges (Won deals count)
+    badges: {
+      totalWonDeals: {
+        type: Number,
+        default: 0,
+      },
+      earnedBadges: [
+        {
+          level: {
+            type: Number, // 10, 20, 50, 100, 150
+          },
+          earnedAt: {
+            type: Date,
+          },
+        },
+      ],
+    },
+
+    // Deals workspace/history
+    dealsWorkspace: {
+      totalDeals: {
+        type: Number,
+        default: 0,
+      },
+      wonDeals: {
+        type: Number,
+        default: 0,
+      },
+      failedDeals: {
+        type: Number,
+        default: 0,
+      },
+      pendingDeals: {
+        type: Number,
+        default: 0,
+      },
+      history: [
+        {
+          postId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Post",
+          },
+          result: {
+            type: String,
+            enum: ["Won", "Failed", "Pending"],
+          },
+          timestamp: {
+            type: Date,
+            default: Date.now,
+          },
+          notes: {
+            type: String,
+          },
+        },
+      ],
+    },
   },
   {
     timestamps: true,

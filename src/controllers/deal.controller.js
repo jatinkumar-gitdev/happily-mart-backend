@@ -262,6 +262,89 @@ const updateDealStatus = asyncHandler(async (req, res) => {
   
   await Post.findByIdAndUpdate(deal.post, { dealStatus: postStatus });
 
+  // Update user dealsWorkspace history when deal reaches Success/Fail
+  if (status === "Success" || status === "Fail") {
+    try {
+      const post = await Post.findById(deal.post).select("title category");
+      const dealResult = status === "Success" ? "Won" : "Failed";
+      
+      // Fetch both users
+      const [unlockerUser, authorUser] = await Promise.all([
+        User.findById(deal.unlocker),
+        User.findById(deal.author),
+      ]);
+
+      // Update both users' dealsWorkspace
+      const users = [unlockerUser, authorUser];
+      for (const user of users) {
+        if (user) {
+          // Initialize workspace if needed
+          if (!user.dealsWorkspace) {
+            user.dealsWorkspace = {
+              totalDeals: 0,
+              wonDeals: 0,
+              failedDeals: 0,
+              pendingDeals: 0,
+              history: []
+            };
+          }
+
+          // Check if this deal is already in history
+          const existingHistoryIndex = user.dealsWorkspace.history.findIndex(
+            h => h.postId?.toString() === deal.post.toString()
+          );
+
+          if (existingHistoryIndex === -1) {
+            // New entry, update counts
+            if (dealResult === "Won") {
+              user.dealsWorkspace.wonDeals = (user.dealsWorkspace.wonDeals || 0) + 1;
+            } else if (dealResult === "Failed") {
+              user.dealsWorkspace.failedDeals = (user.dealsWorkspace.failedDeals || 0) + 1;
+            }
+            user.dealsWorkspace.totalDeals = (user.dealsWorkspace.totalDeals || 0) + 1;
+
+            // Add to history
+            user.dealsWorkspace.history.push({
+              postId: deal.post,
+              result: dealResult,
+              timestamp: new Date(),
+              notes: `Deal marked as ${dealResult.toLowerCase()}`
+            });
+          } else {
+            // Update existing entry
+            const oldResult = user.dealsWorkspace.history[existingHistoryIndex].result;
+            if (oldResult !== dealResult) {
+              // Adjust counts if result changed
+              if (oldResult === "Won") {
+                user.dealsWorkspace.wonDeals -= 1;
+              } else if (oldResult === "Failed") {
+                user.dealsWorkspace.failedDeals -= 1;
+              }
+
+              if (dealResult === "Won") {
+                user.dealsWorkspace.wonDeals = (user.dealsWorkspace.wonDeals || 0) + 1;
+              } else if (dealResult === "Failed") {
+                user.dealsWorkspace.failedDeals = (user.dealsWorkspace.failedDeals || 0) + 1;
+              }
+
+              user.dealsWorkspace.history[existingHistoryIndex] = {
+                postId: deal.post,
+                result: dealResult,
+                timestamp: new Date(),
+                notes: `Deal marked as ${dealResult.toLowerCase()}`
+              };
+            }
+          }
+
+          await user.save();
+        }
+      }
+    } catch (error) {
+      console.error("Error updating user dealsWorkspace:", error);
+      // Don't fail the request if history update fails
+    }
+  }
+
   // Apply credit adjustments if closing deal
   if (status === "Closed" || status === "Success" || status === "Fail") {
     // Apply bonuses/penalties

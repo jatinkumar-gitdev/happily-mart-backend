@@ -13,6 +13,8 @@ const {
   requestAccountReactivation,
   verifyReactivationToken,
   verifyEmailChange,
+  getUserDealsWorkspace,
+  getUserPostsWithStats,
   avatarUpload,
   handleMulterError,
 } = require("../controllers/user.controller");
@@ -79,6 +81,22 @@ router.post(
   authenticate,
   generalLimiter,
   verifyEmailChange
+);
+
+// Deals workspace routes
+router.get(
+  "/deals/workspace",
+  authenticate,
+  generalLimiter,
+  getUserDealsWorkspace
+);
+
+// Posts with stats routes
+router.get(
+  "/posts/stats",
+  authenticate,
+  generalLimiter,
+  getUserPostsWithStats
 );
 
 module.exports = router;

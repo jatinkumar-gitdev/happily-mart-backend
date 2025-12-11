@@ -140,6 +140,85 @@ const sendNotification = async (userId, { type, title, message, data, priority =
   }
 };
 
+// Send prospect interaction notification to post creator
+const sendProspectInteractionNotification = async (creatorId, prospectData, postId, postTitle) => {
+  try {
+    const prospectName = prospectData.name || "A prospect";
+    const prospectAvatar = prospectData.avatar || null;
+    const viewedTimeAgo = new Date().toISOString();
+    
+    const title = "New Prospect Viewed Your Post";
+    const message = `${prospectName} viewed your post: "${postTitle}"`;
+    const data = { 
+      postId, 
+      prospectId: prospectData._id,
+      prospectName,
+      prospectAvatar,
+      viewedAt: viewedTimeAgo,
+      notificationType: "prospect_view"
+    };
+    
+    await sendNotification(creatorId, {
+      type: "prospect_interaction",
+      title,
+      message,
+      data,
+      priority: "high"
+    });
+  } catch (error) {
+    console.error("Error sending prospect interaction notification:", error);
+  }
+};
+
+// Send validity reminder notification to post creator
+const sendValidityReminderNotification = async (creatorId, postId, postTitle, daysRemaining) => {
+  try {
+    const title = "Post Validity Reminder";
+    const message = `Your post "${postTitle}" will expire in ${daysRemaining} day${daysRemaining !== 1 ? 's' : ''}. Renew now to keep it visible.`;
+    const data = { postId, notificationType: "validity_reminder" };
+    
+    await sendNotification(creatorId, {
+      type: "validity_reminder",
+      title,
+      message,
+      data,
+      priority: "medium"
+    });
+  } catch (error) {
+    console.error("Error sending validity reminder notification:", error);
+  }
+};
+
+// Send unlock notification to post creator when prospect unlocks contact details
+const sendUnlockNotification = async (creatorId, prospectData, postId, postTitle) => {
+  try {
+    const prospectName = prospectData.name || "A prospect";
+    const prospectAvatar = prospectData.avatar || null;
+    const unlockedTimeAgo = new Date().toISOString();
+    
+    const title = "Contact Details Unlocked";
+    const message = `${prospectName} unlocked your contact details for: "${postTitle}"`;
+    const data = { 
+      postId, 
+      prospectId: prospectData._id,
+      prospectName,
+      prospectAvatar,
+      unlockedAt: unlockedTimeAgo,
+      notificationType: "contact_unlock"
+    };
+    
+    await sendNotification(creatorId, {
+      type: "unlock_notification",
+      title,
+      message,
+      data,
+      priority: "high"
+    });
+  } catch (error) {
+    console.error("Error sending unlock notification:", error);
+  }
+};
+
 // Get paginated notifications for a user
 const getNotifications = async (userId, { page = 1, limit = 20, unreadOnly = false }) => {
   try {
@@ -249,11 +328,78 @@ const deleteOldNotifications = async (daysOld = 30) => {
   }
 };
 
+// Send prospect contacted notification to creator
+const sendProspectContactedNotification = async (creatorId, prospectData, postId, postTitle) => {
+  try {
+    const prospectName = prospectData.name || "A prospect";
+    const prospectAvatar = prospectData.avatar || null;
+    const contactedTimeAgo = new Date().toISOString();
+    
+    const title = "Prospect Contacted You";
+    const message = `${prospectName} has made contact regarding: "${postTitle}"`;
+    const data = { 
+      postId, 
+      prospectId: prospectData._id,
+      prospectName,
+      prospectAvatar,
+      contactedAt: contactedTimeAgo,
+      notificationType: "prospect_contacted"
+    };
+    
+    await sendNotification(creatorId, {
+      type: "prospect_interaction",
+      title,
+      message,
+      data,
+      priority: "urgent"
+    });
+  } catch (error) {
+    console.error("Error sending prospect contacted notification:", error);
+  }
+};
+
+// Send badge earned notification to user
+const sendBadgeEarnedNotification = async (userId, badgeLevel, wonDealsCount) => {
+  try {
+    const badgeTitles = {
+      10: "Silver Badge",
+      20: "Gold Badge",
+      50: "Platinum Badge",
+      100: "Diamond Badge",
+      150: "Elite Badge"
+    };
+
+    const badgeTitle = badgeTitles[badgeLevel] || "Achievement Badge";
+    const title = `🏆 ${badgeTitle} Earned!`;
+    const message = `Congratulations! You've reached ${wonDealsCount} successful deals!`;
+    const data = { 
+      badgeLevel,
+      wonDealsCount,
+      notificationType: "badge_earned"
+    };
+    
+    await sendNotification(userId, {
+      type: "system",
+      title,
+      message,
+      data,
+      priority: "high"
+    });
+  } catch (error) {
+    console.error("Error sending badge earned notification:", error);
+  }
+};
+
 module.exports = {
   saveSubscription,
   removeSubscription,
   sendWebPush,
   sendNotification,
+  sendProspectInteractionNotification,
+  sendValidityReminderNotification,
+  sendUnlockNotification,
+  sendProspectContactedNotification,
+  sendBadgeEarnedNotification,
   getNotifications,
   markAsRead,
   markAllAsRead,

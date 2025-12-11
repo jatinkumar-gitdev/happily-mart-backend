@@ -264,7 +264,7 @@ const getSubscriptionHistory = asyncHandler(async (req, res) => {
 
 // Use credit (called when unlocking a post)
 const useCredit = asyncHandler(async (req, res) => {
-  const { postId } = req.body;
+  const { postId, cost } = req.body;
 
   if (!postId) {
     return res.status(400).json({
@@ -273,7 +273,7 @@ const useCredit = asyncHandler(async (req, res) => {
     });
   }
 
-  const result = await subscriptionService.useCredit(req.user._id, postId);
+  const result = await subscriptionService.useCredit(req.user._id, postId, cost || 1);
 
   // Invalidate user cache
   await memcachedService.del(`user_${req.user._id}`);

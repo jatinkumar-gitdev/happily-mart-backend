@@ -4,7 +4,7 @@ const notificationSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   type: { 
     type: String, 
-    enum: ["deal_reminder", "deal_update", "deal_confirmation", "deal_closed", "credit_adjustment", "system", "admin"],
+    enum: ["deal_reminder", "deal_update", "deal_confirmation", "deal_closed", "credit_adjustment", "system", "admin", "prospect_interaction", "unlock_notification", "validity_reminder"],
     required: true 
   },
   title: { type: String, required: true },

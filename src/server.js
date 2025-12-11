@@ -1,7 +1,62 @@
 require("dotenv").config();
 
+const http = require("http");
+const { Server: SocketIO } = require("socket.io");
 const app = require("./app");
 const { PORT } = require("./config/env");
+
+const server = http.createServer(app);
+const io = new SocketIO(server, {
+  path: "/socket.io/",
+  cors: {
+    origin: [process.env.FRONTEND_URL || "http://localhost:3000", "http://localhost:3001"],
+    credentials: true,
+  },
+  transports: ["websocket", "polling"],
+  pingInterval: 25000,
+  pingTimeout: 60000,
+});
+
+app.set("io", io);
+global.io = io;
+
+const userSockets = new Map();
+
+io.on("connection", (socket) => {
+  const userId = socket.handshake.query.userId;
+  
+  if (userId) {
+    if (!userSockets.has(userId)) {
+      userSockets.set(userId, []);
+    }
+    userSockets.get(userId).push(socket.id);
+    socket.userId = userId;
+    socket.join(`user:${userId}`);
+    console.log(`User ${userId} connected with socket ${socket.id}`);
+  }
+
+  socket.on("disconnect", () => {
+    if (userId && userSockets.has(userId)) {
+      const sockets = userSockets.get(userId);
+      const index = sockets.indexOf(socket.id);
+      if (index > -1) {
+        sockets.splice(index, 1);
+      }
+      if (sockets.length === 0) {
+        userSockets.delete(userId);
+      }
+    }
+    console.log(`User ${userId} disconnected`);
+  });
+});
+
+app.emitToUser = (userId, eventName, data) => {
+  io.to(`user:${userId}`).emit(eventName, data);
+};
+
+app.broadcastToAll = (eventName, data) => {
+  io.emit(eventName, data);
+};
 
 // Validate required environment variables
 const requiredEnvVars = ["JWT_SECRET", "JWT_REFRESH_SECRET"];
@@ -31,17 +86,19 @@ if (missingVars.length > 0) {
 // Initialize scheduled jobs
 const { initializeAccountDeletionJob } = require("./jobs/accountDeletion.job");
 const { scheduleDealReminders } = require("./jobs/dealReminders.job");
+const { schedulePostValidityReminders } = require("./jobs/postValidityReminders.job");
 const {
   initializeSubscriptionPlans,
 } = require("./services/subscription.service");
 
 initializeAccountDeletionJob();
 scheduleDealReminders();
+schedulePostValidityReminders();
 
 // Initialize subscription plans
 initializeSubscriptionPlans();
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`\n🚀 Server running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
   if (process.env.NODE_ENV !== "production") {

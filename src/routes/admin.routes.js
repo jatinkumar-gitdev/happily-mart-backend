@@ -13,9 +13,11 @@ const {
   closeDeal,
   getDealAnalytics,
   getRecentActivity,
+  getPostAnalytics
 } = require("../controllers/admin.controller");
 const { authenticate, authorizeAdmin } = require("../middleware/auth.middleware");
 const { generalLimiter } = require("../middleware/rateLimiter");
+const dealRoutes = require("./deal.routes");
 
 const router = express.Router();
 
@@ -42,5 +44,6 @@ router.delete("/deals/:id", closeDeal);
 // Analytics
 router.get("/analytics/deals", getDealAnalytics);
 router.get("/analytics/activity", getRecentActivity);
+router.get("/posts/analytics", getPostAnalytics);
 
 module.exports = router;

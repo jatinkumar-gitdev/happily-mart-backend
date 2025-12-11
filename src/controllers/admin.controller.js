@@ -1,11 +1,12 @@
 const asyncHandler = require("../utils/asyncHandler");
-const Deal = require("../models/Deal.model");
-const Post = require("../models/Post.model");
 const User = require("../models/User.model");
+const Post = require("../models/Post.model");
+const Deal = require("../models/Deal.model");
+const { sanitizeUser } = require("../utils/helpers");
 
-// Get all users (admin only)
+// Get all users (paginated)
 const getAllUsers = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, search } = req.query;
+  const { page = 1, limit = 20, search = "" } = req.query;
   const skip = (page - 1) * limit;
 
   let query = {};
@@ -27,106 +28,77 @@ const getAllUsers = asyncHandler(async (req, res) => {
 
   res.json({
     success: true,
-    users,
+    users: users.map(sanitizeUser),
     total,
     page: parseInt(page),
     pages: Math.ceil(total / limit),
   });
 });
 
-// Get user by ID (admin only)
+// Get user by ID
 const getUserById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   const user = await User.findById(id).select("-password");
-  
   if (!user) {
-    return res.status(404).json({
-      success: false,
-      message: "User not found",
-    });
+    return res.status(404).json({ success: false, message: "User not found" });
   }
 
-  res.json({
-    success: true,
-    user,
-  });
+  res.json({ success: true, user: sanitizeUser(user) });
 });
 
-// Update user (admin only)
+// Update user
 const updateUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const updateData = req.body;
+  const updates = req.body;
 
-  // Remove sensitive fields that shouldn't be updated by admin
-  delete updateData.password;
-  delete updateData.role;
-  delete updateData.email;
+  // Remove sensitive fields that shouldn't be updated via admin panel
+  delete updates.password;
+  delete updates.emailVerificationToken;
+  delete updates.resetPasswordToken;
+  delete updates.role;
 
-  const user = await User.findByIdAndUpdate(
-    id,
-    updateData,
-    { new: true, runValidators: true }
-  ).select("-password");
+  const user = await User.findByIdAndUpdate(id, updates, {
+    new: true,
+    runValidators: true,
+  }).select("-password");
 
   if (!user) {
-    return res.status(404).json({
-      success: false,
-      message: "User not found",
-    });
+    return res.status(404).json({ success: false, message: "User not found" });
   }
 
-  res.json({
-    success: true,
-    message: "User updated successfully",
-    user,
-  });
+  res.json({ success: true, user: sanitizeUser(user) });
 });
 
-// Deactivate user (admin only)
+// Deactivate user
 const deactivateUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { reason } = req.body;
 
   const user = await User.findByIdAndUpdate(
     id,
-    {
-      isDeactivated: true,
-      deactivationReason: reason,
-    },
+    { isDeactivated: true },
     { new: true }
   ).select("-password");
 
   if (!user) {
-    return res.status(404).json({
-      success: false,
-      message: "User not found",
-    });
+    return res.status(404).json({ success: false, message: "User not found" });
   }
 
-  res.json({
-    success: true,
-    message: "User deactivated successfully",
-    user,
-  });
+  res.json({ success: true, user: sanitizeUser(user) });
 });
 
-// Get all posts (admin only)
+// Get all posts (paginated)
 const getAllPosts = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, search, status } = req.query;
+  const { page = 1, limit = 20, search = "" } = req.query;
   const skip = (page - 1) * limit;
 
-  let query = {};
+  let query = { isActive: true };
   if (search) {
     query.$or = [
       { title: { $regex: search, $options: "i" } },
       { requirement: { $regex: search, $options: "i" } },
       { description: { $regex: search, $options: "i" } },
     ];
-  }
-
-  if (status) {
-    query.isActive = status === "active";
   }
 
   const posts = await Post.find(query)
@@ -146,26 +118,22 @@ const getAllPosts = asyncHandler(async (req, res) => {
   });
 });
 
-// Get post by ID (admin only)
+// Get post by ID
 const getPostById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const post = await Post.findById(id).populate("author", "name email companyName");
-  
+  const post = await Post.findById(id).populate(
+    "author",
+    "name email companyName"
+  );
   if (!post) {
-    return res.status(404).json({
-      success: false,
-      message: "Post not found",
-    });
+    return res.status(404).json({ success: false, message: "Post not found" });
   }
 
-  res.json({
-    success: true,
-    post,
-  });
+  res.json({ success: true, post });
 });
 
-// Update post status (admin only)
+// Update post status
 const updatePostStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { isActive } = req.body;
@@ -174,53 +142,31 @@ const updatePostStatus = asyncHandler(async (req, res) => {
     id,
     { isActive },
     { new: true }
-  ).populate("author", "name email companyName");
-
+  );
   if (!post) {
-    return res.status(404).json({
-      success: false,
-      message: "Post not found",
-    });
+    return res.status(404).json({ success: false, message: "Post not found" });
   }
 
-  res.json({
-    success: true,
-    message: `Post ${isActive ? "activated" : "deactivated"} successfully`,
-    post,
-  });
+  res.json({ success: true, post });
 });
 
-// Get all deals (admin only)
+// Get all deals (paginated)
 const getAllDeals = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, search, status, sortBy = "createdAt", sortOrder = "desc" } = req.query;
+  const { page = 1, limit = 20, status } = req.query;
   const skip = (page - 1) * limit;
 
-  let query = {};
-  
-  if (search) {
-    query.$or = [
-      { dealId: { $regex: search, $options: "i" } },
-      { "post.title": { $regex: search, $options: "i" } },
-      { "unlocker.name": { $regex: search, $options: "i" } },
-      { "author.name": { $regex: search, $options: "i" } },
-    ];
-  }
-
+  let query = { isActive: true };
   if (status) {
     query.status = status;
   }
 
-  const sortOptions = {};
-  sortOptions[sortBy] = sortOrder === "asc" ? 1 : -1;
-
   const deals = await Deal.find(query)
-    .populate("post", "title requirement category subcategory images")
-    .populate("unlocker", "name email companyName designation phone avatar")
-    .populate("author", "name email companyName designation phone avatar")
-    .sort(sortOptions)
+    .populate("post", "title")
+    .populate("unlocker", "name email")
+    .populate("author", "name email")
+    .sort({ createdAt: -1 })
     .skip(skip)
-    .limit(parseInt(limit))
-    .lean();
+    .limit(parseInt(limit));
 
   const total = await Deal.countDocuments(query);
 
@@ -233,120 +179,57 @@ const getAllDeals = asyncHandler(async (req, res) => {
   });
 });
 
-// Get deal by ID (admin only)
+// Get deal by ID
 const getDealById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   const deal = await Deal.findById(id)
-    .populate("post", "title requirement description category subcategory images hsnCode quantity unit")
-    .populate("unlocker", "name email phone countryCode companyName designation avatar")
-    .populate("author", "name email phone countryCode companyName designation avatar");
-
+    .populate("post", "title description")
+    .populate("unlocker", "name email")
+    .populate("author", "name email");
   if (!deal) {
-    return res.status(404).json({
-      success: false,
-      message: "Deal not found",
-    });
+    return res.status(404).json({ success: false, message: "Deal not found" });
   }
 
-  res.json({
-    success: true,
-    deal,
-  });
+  res.json({ success: true, deal });
 });
 
-// Update deal status (admin override)
+// Update deal status
 const updateDealStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { status, notes } = req.body;
-  const adminId = req.user._id;
+  const { status } = req.body;
 
-  const deal = await Deal.findById(id);
-
+  const deal = await Deal.findByIdAndUpdate(
+    id,
+    { status },
+    { new: true }
+  );
   if (!deal) {
-    return res.status(404).json({
-      success: false,
-      message: "Deal not found",
-    });
+    return res.status(404).json({ success: false, message: "Deal not found" });
   }
 
-  const validStatuses = ["Contacted", "Ongoing", "Success", "Fail", "Closed"];
-  if (!validStatuses.includes(status)) {
-    return res.status(400).json({
-      success: false,
-      message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
-    });
-  }
-
-  deal.status = status;
-  deal.statusHistory.push({
-    status,
-    updatedBy: adminId,
-    updatedAt: new Date(),
-    notes: notes || "Status updated by admin",
-    isAdminOverride: true,
-  });
-
-  await deal.save();
-
-  // Update post status
-  let postStatus = "Available";
-  if (status === "Contacted" || status === "Ongoing") {
-    postStatus = "In Progress";
-  } else if (status === "Success" || status === "Fail") {
-    postStatus = "Completed";
-  } else if (status === "Closed") {
-    postStatus = "Cancelled";
-  }
-
-  await Post.findByIdAndUpdate(deal.post, { dealStatus: postStatus });
-
-  res.json({
-    success: true,
-    message: "Deal status updated by admin",
-    deal,
-  });
+  res.json({ success: true, deal });
 });
 
-// Force close a deal (admin only)
+// Close deal
 const closeDeal = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { reason } = req.body;
-  const adminId = req.user._id;
 
-  const deal = await Deal.findById(id);
-
+  const deal = await Deal.findByIdAndUpdate(
+    id,
+    { isActive: false },
+    { new: true }
+  );
   if (!deal) {
-    return res.status(404).json({
-      success: false,
-      message: "Deal not found",
-    });
+    return res.status(404).json({ success: false, message: "Deal not found" });
   }
 
-  deal.status = "Closed";
-  deal.isActive = false;
-  deal.statusHistory.push({
-    status: "Closed",
-    updatedBy: adminId,
-    updatedAt: new Date(),
-    notes: reason || "Force closed by admin",
-    isAdminOverride: true,
-  });
-
-  await deal.save();
-
-  await Post.findByIdAndUpdate(deal.post, { dealStatus: "Cancelled" });
-
-  res.json({
-    success: true,
-    message: "Deal force closed by admin",
-    deal,
-  });
+  res.json({ success: true, message: "Deal closed successfully" });
 });
 
-// Get deal analytics (admin only)
+// Get deal analytics
 const getDealAnalytics = asyncHandler(async (req, res) => {
-  // Get counts by status
+  // Success rate by status
   const statusCounts = await Deal.aggregate([
     {
       $group: {
@@ -356,41 +239,7 @@ const getDealAnalytics = asyncHandler(async (req, res) => {
     },
   ]);
 
-  // Get recent deals
-  const recentDeals = await Deal.find()
-    .populate("post", "title")
-    .populate("unlocker", "name email")
-    .populate("author", "name email")
-    .sort({ createdAt: -1 })
-    .limit(10);
-
-  // Calculate success rate
-  const totalDeals = await Deal.countDocuments();
-  const successDeals = await Deal.countDocuments({ status: "Success" });
-  const failDeals = await Deal.countDocuments({ status: "Fail" });
-  const closedDeals = await Deal.countDocuments({ status: "Closed" });
-  
-  const successRate = totalDeals > 0 ? (successDeals / totalDeals) * 100 : 0;
-  const failRate = totalDeals > 0 ? (failDeals / totalDeals) * 100 : 0;
-  const completionRate = totalDeals > 0 ? ((successDeals + failDeals + closedDeals) / totalDeals) * 100 : 0;
-
-  // Get chronic non-update statistics
-  const chronicNonUpdateCount = await Deal.countDocuments({ chronicNonUpdate: true });
-  
-  // Get total penalties applied
-  const totalPenaltiesResult = await Deal.aggregate([
-    {
-      $group: {
-        _id: null,
-        totalPenalties: { $sum: "$creditAdjustments.penalty" },
-      },
-    },
-  ]);
-  
-  const totalPenaltiesApplied = totalPenaltiesResult.length > 0 ? totalPenaltiesResult[0].totalPenalties : 0;
-  const avgPenaltyPerDeal = totalDeals > 0 ? totalPenaltiesApplied / totalDeals : 0;
-  
-  // Calculate average response time
+  // Average response time
   const responseTimes = await Deal.aggregate([
     {
       $match: {
@@ -408,116 +257,196 @@ const getDealAnalytics = asyncHandler(async (req, res) => {
       },
     },
   ]);
-  
+
   const avgResponseTime =
     responseTimes.length > 0
       ? responseTimes.reduce((sum, item) => sum + item.responseTime, 0) / responseTimes.length
       : 0;
 
-  // Deals by month (last 6 months)
-  const sixMonthsAgo = new Date();
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-  
-  const dealsByMonth = await Deal.aggregate([
-    {
-      $match: {
-        createdAt: { $gte: sixMonthsAgo },
-      },
-    },
-    {
-      $group: {
-        _id: {
-          year: { $year: "$createdAt" },
-          month: { $month: "$createdAt" },
-        },
-        count: { $sum: 1 },
-        successful: {
-          $sum: { $cond: [{ $eq: ["$status", "Success"] }, 1, 0] },
-        },
-      },
-    },
-    { $sort: { "_id.year": 1, "_id.month": 1 } },
-  ]);
-
   res.json({
     success: true,
-    analytics: {
-      statusCounts,
-      recentDeals,
-      totalDeals,
-      successRate: parseFloat(successRate.toFixed(2)),
-      failRate: parseFloat(failRate.toFixed(2)),
-      completionRate: parseFloat(completionRate.toFixed(2)),
-      chronicNonUpdateCount,
-      totalPenaltiesApplied,
-      avgPenaltyPerDeal: parseFloat(avgPenaltyPerDeal.toFixed(2)),
-      avgResponseTime: parseFloat(avgResponseTime.toFixed(2)),
-      dealsByMonth,
-    },
+    statusCounts,
+    avgResponseTime: parseFloat(avgResponseTime.toFixed(2)),
   });
 });
 
-// Get recent activity (admin only)
+// Get recent activity
 const getRecentActivity = asyncHandler(async (req, res) => {
-  const { limit = 50 } = req.query;
-
-  // Recent deals
-  const recentDeals = await Deal.find()
-    .populate("post", "title")
-    .populate("unlocker", "name email")
-    .populate("author", "name email")
-    .sort({ createdAt: -1 })
-    .limit(parseInt(limit / 3));
-
-  // Recent posts
-  const recentPosts = await Post.find()
-    .populate("author", "name email")
-    .sort({ createdAt: -1 })
-    .limit(parseInt(limit / 3));
-
-  // Recent users
   const recentUsers = await User.find()
-    .select("name email companyName createdAt role")
+    .select("name email createdAt")
     .sort({ createdAt: -1 })
-    .limit(parseInt(limit / 3));
+    .limit(5);
 
-  // Combine and format activity
-  const activity = [
-    ...recentDeals.map((deal) => ({
-      type: "deal",
-      id: deal._id,
-      dealId: deal.dealId,
-      title: deal.post?.title || "Unknown Post",
-      status: deal.status,
-      participants: {
-        unlocker: deal.unlocker?.name,
-        author: deal.author?.name,
-      },
-      createdAt: deal.createdAt,
-    })),
-    ...recentPosts.map((post) => ({
-      type: "post",
-      id: post._id,
-      title: post.title,
-      author: post.author?.name,
-      isActive: post.isActive,
-      createdAt: post.createdAt,
-    })),
-    ...recentUsers.map((user) => ({
-      type: "user",
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      companyName: user.companyName,
-      role: user.role,
-      createdAt: user.createdAt,
-    })),
-  ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const recentPosts = await Post.find({ isActive: true })
+    .populate("author", "name")
+    .select("title createdAt")
+    .sort({ createdAt: -1 })
+    .limit(5);
+
+  const recentDeals = await Deal.find({ isActive: true })
+    .populate("post", "title")
+    .populate("unlocker", "name")
+    .select("status createdAt")
+    .sort({ createdAt: -1 })
+    .limit(5);
 
   res.json({
     success: true,
-    activity: activity.slice(0, parseInt(limit)),
+    recentUsers,
+    recentPosts,
+    recentDeals,
   });
+});
+
+// Get post analytics for admin dashboard
+const getPostAnalytics = asyncHandler(async (req, res) => {
+  try {
+    // Get total posts
+    const totalPosts = await Post.countDocuments();
+    
+    // Get active posts
+    const activePosts = await Post.countDocuments({ 
+      postStatus: "Active",
+      expiresAt: { $gte: new Date() }
+    });
+    
+    // Get total views and contacts
+    const postsAggregation = await Post.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalViews: { $sum: "$unlockedDetailCount" },
+          totalContacts: { $sum: "$contactCount" },
+          avgContactsPerPost: { $avg: "$contactCount" }
+        }
+      }
+    ]);
+    
+    const postData = postsAggregation[0] || { 
+      totalViews: 0, 
+      totalContacts: 0, 
+      avgContactsPerPost: 0 
+    };
+    
+    // Get total creators (users who have created posts)
+    const totalCreators = await User.countDocuments({ 
+      _id: { $in: await Post.distinct("author") }
+    });
+    
+    // Get top creators by contact count
+    const topCreators = await Post.aggregate([
+      {
+        $group: {
+          _id: "$author",
+          totalContacts: { $sum: "$contactCount" },
+          postCount: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "_id",
+          as: "authorInfo"
+        }
+      },
+      {
+        $unwind: "$authorInfo"
+      },
+      {
+        $project: {
+          name: "$authorInfo.name",
+          companyName: "$authorInfo.companyName",
+          totalContacts: 1,
+          postCount: 1
+        }
+      },
+      {
+        $sort: { totalContacts: -1 }
+      },
+      {
+        $limit: 10
+      }
+    ]);
+    
+    // Get badge distribution
+    const badgeDistribution = await Post.aggregate([
+      {
+        $group: {
+          _id: "$badgeLevel",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    // Format badge distribution
+    const formattedBadgeDistribution = {
+      bronze: 0, // 10+ contacts
+      silver: 0, // 20+ contacts
+      gold: 0, // 50+ contacts
+      platinum: 0, // 100+ contacts
+      diamond: 0 // 150+ contacts
+    };
+    
+    badgeDistribution.forEach(item => {
+      switch(item._id) {
+        case 1: formattedBadgeDistribution.bronze = item.count; break;
+        case 2: formattedBadgeDistribution.silver = item.count; break;
+        case 3: formattedBadgeDistribution.gold = item.count; break;
+        case 4: formattedBadgeDistribution.platinum = item.count; break;
+        case 5: formattedBadgeDistribution.diamond = item.count; break;
+      }
+    });
+    
+    // Get active prospects (users who have unlocked posts)
+    const activeProspects = await User.countDocuments({
+      _id: { $in: await Post.distinct("unlockedBy.prospect") }
+    });
+    
+    // Get returning prospects (users who have unlocked multiple posts)
+    const returningProspectsAggregation = await Post.aggregate([
+      {
+        $unwind: "$unlockedBy"
+      },
+      {
+        $group: {
+          _id: "$unlockedBy.prospect",
+          unlockCount: { $sum: 1 }
+        }
+      },
+      {
+        $match: {
+          unlockCount: { $gt: 1 }
+        }
+      }
+    ]);
+    
+    const returningProspects = returningProspectsAggregation.length;
+    
+    // Calculate average posts per creator
+    const avgPostsPerCreator = totalCreators > 0 ? totalPosts / totalCreators : 0;
+    
+    res.json({
+      success: true,
+      totalPosts,
+      activePosts,
+      totalViews: postData.totalViews,
+      totalContacts: postData.totalContacts,
+      avgContactsPerPost: postData.avgContactsPerPost,
+      totalCreators,
+      topCreators,
+      badgeDistribution: formattedBadgeDistribution,
+      activeProspects,
+      returningProspects,
+      avgPostsPerCreator
+    });
+  } catch (error) {
+    console.error("Error fetching post analytics:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch post analytics"
+    });
+  }
 });
 
 module.exports = {
@@ -534,4 +463,5 @@ module.exports = {
   closeDeal,
   getDealAnalytics,
   getRecentActivity,
+  getPostAnalytics
 };

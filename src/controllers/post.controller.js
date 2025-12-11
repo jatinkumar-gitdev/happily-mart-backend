@@ -6,9 +6,10 @@ const { sanitizeUser } = require("../utils/helpers");
 const subscriptionService = require("../services/subscription.service");
 const memcachedService = require("../services/memcached.service");
 const { createDeal } = require("./deal.controller");
+const { sendProspectInteractionNotification, sendUnlockNotification } = require("../services/notification.service");
 
 const createPost = asyncHandler(async (req, res) => {
-  const { title, requirement, description, category, subcategory, quantity, unit, hsnCode } = req.body;
+  const { title, requirement, description, category, subcategory, quantity, unit, hsnCode, validityPeriod = 7, isCreator = true, creditCost = 1 } = req.body;
 
   if (!title || !requirement || !description || !category || !subcategory || !quantity || !unit || !hsnCode) {
     return res.status(400).json({
@@ -45,6 +46,10 @@ const createPost = asyncHandler(async (req, res) => {
     ? req.files.map((file) => `/uploads/posts/${file.filename}`)
     : [];
 
+  // Calculate expiry date based on validity period
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + parseInt(validityPeriod));
+
   const post = await Post.create({
     title,
     requirement,
@@ -56,6 +61,11 @@ const createPost = asyncHandler(async (req, res) => {
     subcategory,
     images,
     author: req.user._id,
+    validityPeriod: parseInt(validityPeriod),
+    expiresAt,
+    isCreator: isCreator === 'true' || isCreator === true,
+    creditCost: parseInt(creditCost) || 1,
+    isActive: true,
   });
 
   // Deduct create credit
@@ -74,12 +84,23 @@ const createPost = asyncHandler(async (req, res) => {
   
   // Invalidate paginated posts cache (pages 1-10 should cover most cases)
   for (let i = 1; i <= 10; i++) {
-    await memcachedService.del(`posts_${i}_6`); // 6 is the default limit
-    await memcachedService.del(`posts_${i}_10`); // 10 is another common limit
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
   }
   
   // Invalidate user cache
   await memcachedService.del(`user_${req.user._id}`);
+  
+  // Emit socket event for feed refresh
+  if (global.io) {
+    global.io.emit("post:created", {
+      postId: post._id,
+      title: post.title,
+      author: req.user._id,
+    });
+  }
   
   // Small delay to ensure cache is cleared before responding
   await new Promise(resolve => setTimeout(resolve, 100));
@@ -97,7 +118,7 @@ const buildPostResponse = (posts, userId) => {
     const postObj = post.toObject();
 
     // Add credit cost for unlocking
-    postObj.creditCost = 1;
+    postObj.creditCost = post.creditCost || 1;
 
     const isAuthor =
       userId &&
@@ -110,17 +131,46 @@ const buildPostResponse = (posts, userId) => {
       postObj.isUnlocked = true;
       postObj.isOwnPost = true;
       // Keep full description and author details
+      // Add creator-specific fields
+        postObj.unlockedDetailCount = post.unlockedDetailCount || 0;
+        postObj.contactCount = post.contactCount || 0;
+      postObj.dealToggleStatus = post.dealToggleStatus || "Pending";
+      postObj.badgeLevel = post.badgeLevel || 0;
+      postObj.isCreator = post.isCreator || true; // Add isCreator flag
+      // If post is expired, provide revive options to the creator
+      if (post.isExpired || post.postStatus === "Expired") {
+        postObj.canRevive = true;
+        const options = [7, 15, 30];
+        postObj.reviveOptions = options.map((days) => ({
+          days,
+          cost: Math.ceil(days / 7),
+        }));
+      } else {
+        postObj.canRevive = false;
+        postObj.reviveOptions = [];
+      }
     } else if (userId) {
-      // Other user's post - check if unlocked
-      postObj.isUnlocked = post.unlockedBy && post.unlockedBy.some(
-        (unlock) => unlock.user.toString() === userId.toString()
-      );
+        // Other user's post - check if unlocked
+        // If post is expired or not active, never consider it unlocked for prospects
+        if (post.postStatus === "Expired" || post.isExpired || post.isActive === false) {
+          postObj.isUnlocked = false;
+        } else {
+          postObj.isUnlocked = post.unlockedBy && post.unlockedBy.some(
+            (unlock) => {
+              // Handle both old format (user) and new format (prospect)
+              const unlockedUserId = unlock.prospect || unlock.user;
+              return unlockedUserId && unlockedUserId.toString() === userId.toString();
+            }
+          );
+        }
       postObj.isOwnPost = false;
       
       // Hide full description if not unlocked
       if (!postObj.isUnlocked) {
         postObj.description = postObj.description.substring(0, 100) + "...";
       }
+      
+      // Don't increment view count here anymore, it's done in getPostById
     } else {
       // Not authenticated
       postObj.isUnlocked = false;
@@ -128,20 +178,71 @@ const buildPostResponse = (posts, userId) => {
       postObj.description = postObj.description.substring(0, 100) + "...";
     }
 
+    // Add common fields
+    postObj.validityPeriod = post.validityPeriod || 7;
+    postObj.expiresAt = post.expiresAt;
+    postObj.postStatus = post.postStatus || "Active";
+      postObj.unlockedDetailCount = post.unlockedDetailCount || 0;
+      postObj.contactCount = post.contactCount || 0;
+      postObj.dealToggleStatus = post.dealToggleStatus || "Pending";
+      postObj.dealResult = post.dealResult || "Pending";
+    
+    // Check if post is expired
+    if (post.expiresAt && new Date() > post.expiresAt) {
+      postObj.postStatus = "Expired";
+    }
+
     return postObj;
   });
 };
+
+// Return possible validity options and credit cost for a specific post (owner only)
+const getValidityOptions = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user._id;
+
+  const post = await Post.findById(id);
+  if (!post) {
+    return res.status(404).json({ success: false, message: "Post not found" });
+  }
+
+  if (post.author.toString() !== userId.toString()) {
+    return res.status(403).json({ success: false, message: "Not authorized" });
+  }
+
+  const options = [7, 15, 30];
+  const reviveOptions = options.map((days) => ({ days, cost: Math.ceil(days / 7) }));
+
+  res.json({ success: true, reviveOptions, postStatus: post.postStatus, isExpired: post.isExpired });
+});
 
 const filterPostsWithActiveAuthors = (posts) =>
   posts.filter((post) => post.author && !post.author.isDeactivated);
 
 const getPosts = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10 } = req.query;
+  const { page = 1, limit = 10, author } = req.query;
   const skip = (page - 1) * limit;
 
-  // Try to get from cache first
-  const cacheKey = `posts_${page}_${limit}`;
-  const cachedResult = await memcachedService.get(cacheKey);
+  // Build query
+  const query = { isActive: true };
+  
+  // Filter by author if specified
+  if (author === 'me') {
+    query.author = req.user._id;
+  } else if (author) {
+    query.author = author;
+  }
+
+  const userId = req.user?._id;
+
+  // Try to get from cache first (only for anonymous users to avoid isOwnPost conflicts)
+  let cacheKey = null;
+  let cachedResult = null;
+  
+  if (!userId) {
+    cacheKey = `posts_${page}_${limit}_${author || 'all'}_anonymous`;
+    cachedResult = await memcachedService.get(cacheKey);
+  }
 
   if (cachedResult) {
     return res.json({
@@ -150,8 +251,8 @@ const getPosts = asyncHandler(async (req, res) => {
     });
   }
 
-  const posts = await Post.find({ isActive: true })
-    .select("title requirement description category subcategory images author likes favorites shares comments createdAt unlockedBy")
+  const posts = await Post.find(query)
+    .select("title requirement description category subcategory images author likes favorites shares comments createdAt unlockedBy validityPeriod expiresAt postStatus dealToggleStatus dealResult wonCount unlockedDetailCount contactCount badgeLevel isActive isExpired")
     .populate(
       "author",
       "name email phone avatar companyName designation country state city isDeactivated"
@@ -160,11 +261,10 @@ const getPosts = asyncHandler(async (req, res) => {
     .skip(skip)
     .limit(parseInt(limit));
 
-  const userId = req.user?._id;
   const filteredPosts = filterPostsWithActiveAuthors(posts);
   const postsWithUnlockStatus = buildPostResponse(filteredPosts, userId);
 
-  const total = await Post.countDocuments({ isActive: true });
+  const total = await Post.countDocuments(query);
 
   const result = {
     posts: postsWithUnlockStatus,
@@ -173,8 +273,10 @@ const getPosts = asyncHandler(async (req, res) => {
     pages: Math.ceil(total / limit),
   };
 
-  // Cache for 5 minutes
-  await memcachedService.set(cacheKey, result, 300);
+  // Cache for 5 minutes (only for anonymous users to avoid isOwnPost conflicts)
+  if (!userId) {
+    await memcachedService.set(cacheKey, result, 300);
+  }
 
   res.json({
     success: true,
@@ -195,7 +297,7 @@ const getPublicPosts = asyncHandler(async (req, res) => {
     const postObj = post.toObject();
     postObj.description = postObj.description.substring(0, 100) + "...";
     postObj.isBlurred = true;
-    postObj.creditCost = 1;
+    postObj.creditCost = post.creditCost || 1;
     return postObj;
   });
 
@@ -224,7 +326,7 @@ const getPostById = asyncHandler(async (req, res) => {
   const userId = req.user?._id;
   const postObj = post.toObject();
 
-  postObj.creditCost = 1;
+  postObj.creditCost = post.creditCost || 1;
   const isAuthor =
     userId &&
     post.author &&
@@ -236,9 +338,18 @@ const getPostById = asyncHandler(async (req, res) => {
     postObj.isOwnPost = true;
   } else if (userId) {
     postObj.isUnlocked = post.unlockedBy && post.unlockedBy.some(
-      (unlock) => unlock.user.toString() === userId.toString()
+      (unlock) => {
+        // Handle both old format (user) and new format (prospect)
+        const unlockedUserId = unlock.prospect || unlock.user;
+        return unlockedUserId && unlockedUserId.toString() === userId.toString();
+      }
     );
     postObj.isOwnPost = false;
+    
+    // If post is expired or inactive, don't increment views or allow unlocks
+      if (post.postStatus === "Expired" || post.isExpired || post.isActive === false) {
+        postObj.isUnlocked = false;
+      }
   } else {
     postObj.isUnlocked = false;
     postObj.isOwnPost = false;
@@ -249,6 +360,134 @@ const getPostById = asyncHandler(async (req, res) => {
   }
 
   res.json({ success: true, post: postObj });
+});
+
+// Add new controller method for incrementing view count
+const incrementViewCount = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user?._id;
+
+  // Validate post existence
+  const post = await Post.findById(id);
+  if (!post) {
+    return res.status(404).json({ success: false, message: "Post not found" });
+  }
+
+  // Validate post author availability
+  const postAuthor = await User.findById(post.author);
+  if (!postAuthor || postAuthor.isDeactivated) {
+    return res.status(404).json({
+      success: false,
+      message: "Post owner is unavailable",
+    });
+  }
+
+  // Prevent authors from incrementing their own view count
+  if (post.author.toString() === userId.toString()) {
+    return res.status(200).json({ success: true, message: "View count not incremented for own post" });
+  }
+
+  // Increment unlocked detail count
+  const updatedPost = await Post.findByIdAndUpdate(
+    id,
+    { $inc: { unlockedDetailCount: 1 } },
+    { new: true }
+  ).select("unlockedDetailCount");
+
+  // Invalidate cache and emit socket event for real-time update
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
+  }
+  
+  // Emit socket event to creator
+  if (global.io) {
+    global.io.to(`user:${post.author.toString()}`).emit("post:unlockedDetailCountUpdated", {
+      postId: id,
+      unlockedDetailCount: updatedPost.unlockedDetailCount,
+    });
+  }
+
+  res.json({ 
+    success: true, 
+    message: "Unlocked detail count incremented successfully",
+    unlockedDetailCount: updatedPost.unlockedDetailCount
+  });
+});
+
+// Add new controller method for editing a post
+const editPost = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { title, requirement, description, category, subcategory, quantity, unit, hsnCode, creditCost } = req.body;
+  const userId = req.user._id;
+
+  // Validate required fields
+  if (!title || !requirement || !description || !category || !subcategory || !quantity || !unit || !hsnCode) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Title, requirement, description, category, subcategory, quantity, unit, and HSN code are required",
+    });
+  }
+
+  // Find the post and verify ownership
+  const post = await Post.findOne({ _id: id, author: userId });
+  
+  if (!post) {
+    return res.status(404).json({
+      success: false,
+      message: "Post not found or you don't have permission to edit it",
+    });
+  }
+
+  // Update the post
+  const updatedPost = await Post.findByIdAndUpdate(
+    id,
+    {
+      title,
+      requirement,
+      description,
+      quantity,
+      unit,
+      hsnCode,
+      category,
+      subcategory,
+      ...(creditCost !== undefined ? { creditCost: parseInt(creditCost) || 1 } : {}),
+    },
+    { new: true }
+  ).populate("author", "name email phone avatar companyName");
+
+  // Build proper post response with unlock status
+  const postResponse = buildPostResponse([updatedPost], userId)[0];
+
+  // Invalidate cache
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
+  }
+
+  // Emit socket event for post edit
+  if (global.io) {
+    global.io.emit("post:edited", {
+      postId: id,
+      title: updatedPost.title,
+      requirement: updatedPost.requirement,
+      description: updatedPost.description,
+      category: updatedPost.category,
+      subcategory: updatedPost.subcategory,
+      creditCost: updatedPost.creditCost,
+    });
+  }
+
+  res.json({
+    success: true,
+    message: "Post updated successfully",
+    post: postResponse,
+  });
 });
 
 const likePost = asyncHandler(async (req, res) => {
@@ -274,6 +513,8 @@ const likePost = asyncHandler(async (req, res) => {
 
   // Invalidate all posts cache by using a more reliable approach
   for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
     await memcachedService.del(`posts_${i}_6`);
     await memcachedService.del(`posts_${i}_10`);
   }
@@ -304,6 +545,8 @@ const favoritePost = asyncHandler(async (req, res) => {
 
   // Invalidate all posts cache by using a more reliable approach
   for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
     await memcachedService.del(`posts_${i}_6`);
     await memcachedService.del(`posts_${i}_10`);
   }
@@ -362,6 +605,8 @@ const sharePost = asyncHandler(async (req, res) => {
 
   // Invalidate all posts cache by using a more reliable approach
   for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
     await memcachedService.del(`posts_${i}_6`);
     await memcachedService.del(`posts_${i}_10`);
   }
@@ -395,6 +640,8 @@ const addComment = asyncHandler(async (req, res) => {
 
   // Invalidate all posts cache by using a more reliable approach
   for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
     await memcachedService.del(`posts_${i}_6`);
     await memcachedService.del(`posts_${i}_10`);
   }
@@ -497,9 +744,29 @@ const unlockPost = asyncHandler(async (req, res) => {
     });
   }
 
+  // If post is expired or inactive, prevent unlocking
+  if (post.postStatus === "Expired" || post.isExpired || post.isActive === false) {
+    return res.status(400).json({
+      success: false,
+      message: "This post is not available for unlocking. Renew or revive the post to make it available.",
+    });
+  }
+
+  // Prevent unlocking if deal has been concluded (Won or Failed)
+  if (post.dealResult && ['Won', 'Failed'].includes(post.dealResult)) {
+    return res.status(400).json({
+      success: false,
+      message: "This deal has been concluded and is no longer available for unlocking.",
+    });
+  }
+
   // Check if user has already unlocked this post
   const alreadyUnlocked = post.unlockedBy && post.unlockedBy.some(
-    (unlock) => unlock.user.toString() === userId.toString()
+    (unlock) => {
+      // Handle both old format (user) and new format (prospect)
+      const unlockedUserId = unlock.prospect || unlock.user;
+      return unlockedUserId && unlockedUserId.toString() === userId.toString();
+    }
   );
 
   if (alreadyUnlocked) {
@@ -510,22 +777,29 @@ const unlockPost = asyncHandler(async (req, res) => {
   }
 
   try {
-    // Use credit to unlock the post
-    const creditResult = await subscriptionService.useCredit(userId, id);
+    // Use credit to unlock the post (charge according to post.creditCost)
+    const postCost = post.creditCost || 1;
+    const creditResult = await subscriptionService.useCredit(userId, id, postCost);
 
     // Atomically check and add user to unlockedBy array to prevent race conditions
+    // Also increment contact count
     const updatedPost = await Post.findOneAndUpdate(
       { 
         _id: id, 
-        "unlockedBy.user": { $ne: userId } // Ensure user hasn't already unlocked
+        "unlockedBy.prospect": { $ne: userId }, // Ensure user hasn't already unlocked
+        isActive: true,
+        postStatus: "Active",
+        isExpired: false,
       },
       { 
         $push: { 
           unlockedBy: { 
-            user: userId, 
+            prospect: userId, 
             unlockedAt: new Date() 
-          } 
-        } 
+          },
+          views: { prospect: userId, viewedAt: new Date() }
+        },
+        $inc: { contactCount: 1, unlockedDetailCount: 1 } // Increment contact and unlocked detail count
       },
       { new: true }
     );
@@ -541,6 +815,53 @@ const unlockPost = asyncHandler(async (req, res) => {
     // Update the post reference
     post = updatedPost;
     
+    // Update badge level based on contact count
+    const contactCount = post.contactCount || 0;
+    let badgeLevel = 0;
+    if (contactCount >= 150) badgeLevel = 5; // 150+
+    else if (contactCount >= 100) badgeLevel = 4; // 100
+    else if (contactCount >= 50) badgeLevel = 3; // 50
+    else if (contactCount >= 20) badgeLevel = 2; // 20
+    else if (contactCount >= 10) badgeLevel = 1; // 10
+    
+    if (badgeLevel > post.badgeLevel) {
+      await Post.findByIdAndUpdate(id, { badgeLevel });
+    }
+    
+    // Send notification to post creator about unlock with prospect details
+    try {
+      const prospect = await User.findById(userId).select("name avatar");
+      const creator = await User.findById(post.author._id);
+      if (creator && prospect) {
+        // Send unlock notification
+        await sendUnlockNotification(
+          creator._id,
+          { _id: prospect._id, name: prospect.name, avatar: prospect.avatar },
+          post._id,
+          post.title
+        );
+      }
+    } catch (notificationError) {
+      console.error("Failed to send unlock notification:", notificationError);
+    }
+    
+    // Track prospect interaction
+    try {
+      const ProspectInteraction = require("../models/ProspectInteraction.model");
+      await ProspectInteraction.create({
+        post: post._id,
+        creator: post.author._id,
+        prospect: userId,
+        interactionType: "ContactUnlock",
+        unlockedAt: new Date(),
+        notificationSent: true,
+        notificationSentAt: new Date(),
+        isContacted: false // Will be marked true when deal is actually used
+      });
+    } catch (interactionError) {
+      console.error("Failed to track prospect interaction:", interactionError);
+    }
+    
     // Create a deal for this unlock
     try {
       await createDeal(post._id, userId, post.author._id);
@@ -551,6 +872,8 @@ const unlockPost = asyncHandler(async (req, res) => {
 
     // Invalidate cache to ensure fresh data
     for (let i = 1; i <= 10; i++) {
+      await memcachedService.del(`posts_${i}_6_all`);
+      await memcachedService.del(`posts_${i}_10_all`);
       await memcachedService.del(`posts_${i}_6`);
       await memcachedService.del(`posts_${i}_10`);
     }
@@ -558,10 +881,30 @@ const unlockPost = asyncHandler(async (req, res) => {
     // Also invalidate user cache to update credits
     await memcachedService.del(`user_${userId}`);
 
+    // Emit socket events for real-time updates
+    if (global.io) {
+      // Notify creator of contact count update
+      global.io.to(`user:${post.author._id.toString()}`).emit("post:contactCountUpdated", {
+        postId: id,
+        contactCount: post.contactCount,
+        badgeLevel: post.badgeLevel,
+        prospect: {
+          _id: userId,
+          name: (await User.findById(userId))?.name || "Unknown",
+        },
+      });
+      
+      // Notify all prospects about this post's unlock
+      global.io.emit("post:unlocked", {
+        postId: id,
+        contactCount: post.contactCount,
+      });
+    }
+
     // Prepare response data
     const postObj = post.toObject();
     postObj.isUnlocked = true;
-    postObj.creditCost = 1;
+    postObj.creditCost = post.creditCost || 1;
 
     res.json({
       success: true,
@@ -591,11 +934,335 @@ const unlockPost = asyncHandler(async (req, res) => {
   }
 });
 
+const updateDealToggleStatus = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { dealToggleStatus } = req.body;
+  const userId = req.user._id;
+
+  // Find the post and verify ownership
+  const post = await Post.findOne({ _id: id, author: userId });
+  
+  if (!post) {
+    return res.status(404).json({
+      success: false,
+      message: "Post not found or you don't have permission to update it",
+    });
+  }
+
+  // Validate deal toggle status
+  if (!['Pending', 'Success', 'Fail'].includes(dealToggleStatus)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid deal toggle status",
+    });
+  }
+
+  // Prepare update data
+  const updateData = { dealToggleStatus };
+  let dealResult = "Pending";
+  let dealStatus = "Ongoing";
+  
+  // If toggled to Success or Fail, update deal result and post status
+  if (dealToggleStatus === 'Success') {
+    updateData.dealResult = "Won";
+    dealResult = "Won";
+    updateData.$inc = { wonCount: 1 }; // Increment won count
+    dealStatus = "Success";
+  } else if (dealToggleStatus === 'Fail') {
+    updateData.dealResult = "Failed";
+    dealResult = "Failed";
+    dealStatus = "Fail";
+  }
+
+  // Update the post
+  const updatedPost = await Post.findByIdAndUpdate(
+    id,
+    updateData,
+    { new: true }
+  );
+
+  // Update related deal(s) for this post if toggling to Success or Fail
+  if ((dealToggleStatus === 'Success' || dealToggleStatus === 'Fail') && updatedPost) {
+    try {
+      const deals = await Deal.find({ post: id, isActive: true, status: { $in: ["Contacted", "Ongoing"] } });
+      for (const deal of deals) {
+        // Mark deal as closed due to post deal result
+        deal.status = dealStatus;
+        deal.statusHistory.push({
+          status: dealStatus,
+          updatedBy: userId,
+          updatedAt: new Date(),
+          notes: `Deal ${dealStatus.toLowerCase()} due to post deal toggle by creator`
+        });
+        await deal.save();
+      }
+      console.log(`Updated ${deals.length} deal(s) to ${dealStatus} for post ${id}`);
+    } catch (dealError) {
+      console.error("Error updating deals for post:", dealError);
+      // Don't fail the request if deal update fails
+    }
+  }
+
+  // Update user's deals workspace history and check for badges
+  try {
+    const user = await User.findById(userId);
+    if (user) {
+      // Initialize workspace if needed
+      if (!user.dealsWorkspace) {
+        user.dealsWorkspace = {
+          totalDeals: 0,
+          wonDeals: 0,
+          failedDeals: 0,
+          pendingDeals: 0,
+          history: []
+        };
+      }
+
+      // Update workspace counts
+      if (dealResult === "Won") {
+        user.dealsWorkspace.wonDeals = (user.dealsWorkspace.wonDeals || 0) + 1;
+        
+        // Check for badge achievements
+        const totalWonDeals = user.dealsWorkspace.wonDeals;
+        const badgeLevels = [10, 20, 50, 100, 150];
+        const earnedBadges = user.badges?.earnedBadges || [];
+        const earnedLevels = earnedBadges.map(b => b.level);
+
+        for (const level of badgeLevels) {
+          if (totalWonDeals >= level && !earnedLevels.includes(level)) {
+            // Award new badge
+            user.badges.earnedBadges.push({
+              level,
+              earnedAt: new Date()
+            });
+            
+            // Send badge notification
+            try {
+              const { sendBadgeEarnedNotification } = require("../services/notification.service");
+              await sendBadgeEarnedNotification(userId, level, totalWonDeals);
+            } catch (notificationError) {
+              console.error("Failed to send badge notification:", notificationError);
+            }
+          }
+        }
+        
+        user.badges.totalWonDeals = totalWonDeals;
+      } else if (dealResult === "Failed") {
+        user.dealsWorkspace.failedDeals = (user.dealsWorkspace.failedDeals || 0) + 1;
+      }
+
+      user.dealsWorkspace.totalDeals = (user.dealsWorkspace.totalDeals || 0) + 1;
+
+      // Add to history
+      user.dealsWorkspace.history.push({
+        postId: post._id,
+        result: dealResult,
+        timestamp: new Date(),
+        notes: `Post deal marked as ${dealResult.toLowerCase()}`
+      });
+
+      await user.save();
+    }
+  } catch (error) {
+    console.error("Error updating user deal history:", error);
+    // Don't fail the request if history update fails
+  }
+
+  // Invalidate cache
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
+  }
+
+  // Emit socket events for real-time deal status update
+  if (global.io) {
+    // Notify all users about post status change
+    global.io.emit("post:dealStatusChanged", {
+      postId: id,
+      dealToggleStatus,
+      dealResult,
+      postStatus: updatedPost.postStatus,
+      isActive: updatedPost.isActive,
+    });
+    
+    // Notify prospects who unlocked this post
+    const deals = await Deal.find({ post: id }).select("unlocker");
+    deals.forEach(deal => {
+      if (deal.unlocker) {
+        global.io.to(`user:${deal.unlocker.toString()}`).emit("deal:statusUpdated", {
+          postId: id,
+          dealResult,
+          message: dealResult === "Won" 
+            ? "This deal has been marked as won and is no longer available for unlocking."
+            : "This deal has been marked as failed.",
+        });
+      }
+    });
+  }
+
+  res.json({
+    success: true,
+    message: "Deal toggle status updated successfully",
+    post: updatedPost,
+    dealResult,
+  });
+});
+
+const updatePostValidity = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { validityPeriod } = req.body;
+  const userId = req.user._id;
+
+  // Find the post and verify ownership
+  const post = await Post.findOne({ _id: id, author: userId });
+  
+  if (!post) {
+    return res.status(404).json({
+      success: false,
+      message: "Post not found or you don't have permission to update it",
+    });
+  }
+
+  // Validate validity period
+  if (![7, 15, 30].includes(parseInt(validityPeriod))) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid validity period. Must be 7, 15, or 30 days.",
+    });
+  }
+
+  // Check if subscription has expired
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({ success: false, message: "User not found" });
+  }
+
+  // Check if subscription has expired
+  if (user.subscriptionExpiresAt && new Date() > user.subscriptionExpiresAt) {
+    return res.status(403).json({
+      success: false,
+      message: "Your subscription has expired. Please renew to continue.",
+    });
+  }
+
+  // If post is expired, we need to deduct credits for renewal
+  // Deduct credits for extending validity (1 credit per 7 days).
+  // We charge for the chosen validity period when updating validity.
+  let creditDeductionMessage = "";
+  try {
+    const extensionDays = parseInt(validityPeriod);
+    const creditResult = await subscriptionService.useValidityExtensionCredit(userId, extensionDays, id);
+    creditDeductionMessage = creditResult.message;
+  } catch (creditError) {
+    return res.status(400).json({
+      success: false,
+      message: creditError.message,
+    });
+  }
+
+  // Calculate new expiry date
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + parseInt(validityPeriod));
+
+  // Update the post
+  const updatedPost = await Post.findByIdAndUpdate(
+    id,
+    { 
+      validityPeriod: parseInt(validityPeriod),
+      expiresAt,
+      postStatus: "Active", // Reset to active when validity is renewed
+      isExpired: false,
+      isActive: true,
+      lastRenewalAt: new Date(),
+      validityReminderSent: false,
+      dealResult: "Pending", // Reset deal result on revive so post can be unlocked again
+      dealToggleStatus: "Pending", // Reset toggle status on revive
+    },
+    { new: true }
+  ).populate("author", "name");
+
+  // Invalidate cache
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
+  }
+
+  // Emit socket event for post validity update
+  if (global.io) {
+    global.io.emit("post:validityUpdated", {
+      postId: id,
+      validityPeriod: updatedPost.validityPeriod,
+      expiresAt: updatedPost.expiresAt,
+      postStatus: updatedPost.postStatus,
+      isActive: updatedPost.isActive,
+      dealResult: updatedPost.dealResult,
+    });
+    
+    // Notify creator
+    global.io.to(`user:${userId.toString()}`).emit("post:revived", {
+      postId: id,
+      message: `Your post "${updatedPost.title}" has been successfully revived!`,
+      validityPeriod: updatedPost.validityPeriod,
+      expiresAt: updatedPost.expiresAt,
+    });
+  }
+
+  const message = creditDeductionMessage 
+    ? `Post validity updated successfully. ${creditDeductionMessage}`
+    : "Post validity updated successfully";
+
+  res.json({
+    success: true,
+    message,
+    post: updatedPost,
+  });
+});
+
+// Delete (soft-delete) a post by the author
+const deletePost = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user._id;
+
+  const post = await Post.findOne({ _id: id, author: userId });
+  if (!post) {
+    return res.status(404).json({ success: false, message: "Post not found or you don't have permission to delete it" });
+  }
+
+  // Soft delete: mark as inactive and provisional
+  post.isActive = false;
+  post.postStatus = "Provisional";
+  await post.save();
+
+  // Invalidate caches
+  for (let i = 1; i <= 10; i++) {
+    await memcachedService.del(`posts_${i}_6_all`);
+    await memcachedService.del(`posts_${i}_10_all`);
+    await memcachedService.del(`posts_${i}_6`);
+    await memcachedService.del(`posts_${i}_10`);
+  }
+
+  // Emit socket event for post deletion
+  if (global.io) {
+    global.io.emit("post:deleted", {
+      postId: id,
+      message: "A post you viewed has been deleted.",
+    });
+  }
+
+  res.json({ success: true, message: "Post deleted successfully" });
+});
+
 module.exports = {
   createPost,
   getPosts,
   getPublicPosts,
   getPostById,
+  incrementViewCount,
+  editPost,
   likePost,
   favoritePost,
   getFavoritePosts,
@@ -604,4 +1271,8 @@ module.exports = {
   getComments,
   searchPosts,
   unlockPost,
+  updateDealToggleStatus,
+  updatePostValidity,
+  deletePost,
+  getValidityOptions,
 };

@@ -54,7 +54,13 @@ app.use(
 app.use("/uploads", express.static("uploads"));
 app.use("/avatars", express.static(path.join(__dirname, "../public/avatars")));
 
-// Rate limiting
+// Rate limiting (skip for socket.io)
+app.use((req, res, next) => {
+  if (req.path.startsWith('/socket.io')) {
+    return next();
+  }
+  return generalLimiter(req, res, next);
+});
 app.use("/api/", generalLimiter);
 
 // Routes

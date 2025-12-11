@@ -281,7 +281,8 @@ const purchaseSubscription = async (userId, planName, paymentDetails) => {
   };
 };
 
-const useCredit = async (userId, postId) => {
+// Use credits to unlock a post. `cost` is number of credits to charge (default 1).
+const useCredit = async (userId, postId, cost = 1) => {
   const user = await User.findById(userId);
 
   if (!user) {
@@ -293,22 +294,94 @@ const useCredit = async (userId, postId) => {
     throw new Error("Your subscription has expired. Please renew to continue.");
   }
 
-  // Check if user has sufficient unlock credits
-  if (user.unlockCredits < 1) {
+  // Validate cost
+  cost = parseInt(cost) || 1;
+  if (cost < 1) cost = 1;
+
+  // Check if user has sufficient unlock credits and general credits
+  if ((user.unlockCredits || 0) < cost) {
     throw new Error(
-      "Insufficient unlock credits. Please purchase a plan to get more credits."
+      `Insufficient unlock credits. You need ${cost} unlock credit(s). Please purchase a plan to get more credits.`
+    );
+  }
+  if ((user.credits || 0) < cost) {
+    throw new Error(
+      `Insufficient credits. You need ${cost} credit(s). Please purchase a plan to get more credits.`
     );
   }
 
   // Deduct credits
-  user.unlockCredits -= 1;
-  user.credits -= 1; // Also deduct from general credits for backward compatibility
+  user.unlockCredits = (user.unlockCredits || 0) - cost;
+  user.credits = (user.credits || 0) - cost; // Also deduct from general credits for backward compatibility
   await user.save();
+
+  // Record in credits history
+  try {
+    user.creditsHistory = user.creditsHistory || [];
+    user.creditsHistory.push({
+      amount: cost,
+      type: "used",
+      description: `Unlock post ${postId || "-"}`,
+      relatedEntity: postId || undefined,
+      createdAt: new Date(),
+    });
+    await user.save();
+  } catch (err) {
+    console.error("Failed to record credits history for useCredit:", err);
+  }
 
   return {
     remainingCredits: user.credits,
     remainingUnlockCredits: user.unlockCredits,
-    message: "Credit used successfully",
+    message: `Credit used successfully (${cost} credit${cost !== 1 ? 's' : ''})`,
+  };
+};
+
+// Deduct credits for extending post validity
+const useValidityExtensionCredit = async (userId, extensionDays, postId) => {
+  const user = await User.findById(userId);
+
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  // Check if subscription has expired
+  if (user.subscriptionExpiresAt && new Date() > user.subscriptionExpiresAt) {
+    throw new Error("Your subscription has expired. Please renew to continue.");
+  }
+
+  // Calculate required credits (1 credit per 7 days of extension)
+  const requiredCredits = Math.ceil(extensionDays / 7);
+  
+  // Check if user has sufficient credits
+  if (user.credits < requiredCredits) {
+    throw new Error(
+      `Insufficient credits. You need ${requiredCredits} credit(s) to extend validity for ${extensionDays} day(s).`
+    );
+  }
+
+  // Deduct credits
+  user.credits -= requiredCredits;
+  await user.save();
+
+  // Record in credits history
+  try {
+    user.creditsHistory = user.creditsHistory || [];
+    user.creditsHistory.push({
+      amount: requiredCredits,
+      type: "used",
+      description: `Extend validity by ${extensionDays} days${postId ? ` for post ${postId}` : ""}`,
+      relatedEntity: postId || undefined,
+      createdAt: new Date(),
+    });
+    await user.save();
+  } catch (err) {
+    console.error("Failed to record credits history for useValidityExtensionCredit:", err);
+  }
+
+  return {
+    remainingCredits: user.credits,
+    message: `Successfully extended validity for ${extensionDays} day(s) using ${requiredCredits} credit(s).`,
   };
 };
 
@@ -345,6 +418,7 @@ module.exports = {
   getUserSubscription,
   purchaseSubscription,
   useCredit,
+  useValidityExtensionCredit,
   getSubscriptionHistory,
   getBadgeInfo,
 };
