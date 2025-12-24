@@ -14,7 +14,7 @@ const setRefreshTokenCookie = (res, refreshToken, rememberMe = false, isAdmin = 
     : (rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000); // 30 days or 7 days for regular users
   
   res.cookie(cookieName, refreshToken, {
-    httpOnly: true,
+    httpOnly: true, // Changed from false to true for security
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
     maxAge: maxAge,

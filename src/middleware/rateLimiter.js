@@ -40,8 +40,25 @@ const generalLimiter = rateLimit({
   handler: handleRateLimitExceeded,
 });
 
+// Admin-specific rate limiter with higher limits
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 500, // Higher limit for admin users
+  message: "Too many requests from this IP, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: handleRateLimitExceeded,
+  skip: (req) => {
+    // Skip rate limiting if user is authenticated as admin
+    // This is checked by looking at the user object attached to the request
+    // by the authentication middleware
+    return req.user && req.user.role === "admin";
+  },
+});
+
 module.exports = {
   authLimiter,
   signupLimiter,
   generalLimiter,
+  adminLimiter,
 };

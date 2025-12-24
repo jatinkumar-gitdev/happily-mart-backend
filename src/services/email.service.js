@@ -168,6 +168,21 @@ const sendEmailChangeVerificationEmail = async (email, otp, name) => {
   }
 };
 
+// Function to sanitize invoice values to prevent rendering issues
+const sanitizeInvoiceValue = (value) => {
+  if (typeof value !== 'string') {
+    value = String(value || '');
+  }
+  
+  // Remove superscript and other problematic characters
+  value = value.replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰ªº⁺⁻⁼⁽⁾]/g, '');
+  
+  // Remove extra whitespace
+  value = value.replace(/\s+/g, ' ').trim();
+  
+  return value;
+};
+
 const sendPaymentReceiptEmail = async (email, name, paymentDetails) => {
   try {
     // Generate invoice number
@@ -175,12 +190,11 @@ const sendPaymentReceiptEmail = async (email, name, paymentDetails) => {
     const invoiceNumber = `INV-${new Date().getFullYear()}-${timestamp}`;
 
     // Parse amount for words conversion
-    const totalAmount = parseFloat(
-      paymentDetails.total.replace(/[^0-9.]/g, "")
-    );
+    const totalAmountString = paymentDetails.total.replace(/[₹$€£¥,]/g, "");
+    const totalAmount = parseFloat(totalAmountString) || 0;
     const amountInWords = numberToWords(totalAmount);
 
-    // Prepare invoice data for PDF
+    // Prepare invoice data for PDF - sanitize values to prevent rendering issues
     const invoiceData = {
       invoiceNumber,
       invoiceDate: new Date().toLocaleDateString("en-GB"),
@@ -191,9 +205,9 @@ const sendPaymentReceiptEmail = async (email, name, paymentDetails) => {
       customerPhone: paymentDetails.customerPhone || "",
       customerAddress: paymentDetails.customerAddress || "",
       planName: paymentDetails.planName,
-      price: paymentDetails.price,
-      gst: paymentDetails.gst,
-      total: paymentDetails.total,
+      price: sanitizeInvoiceValue(paymentDetails.price),
+      gst: sanitizeInvoiceValue(paymentDetails.gst),
+      total: sanitizeInvoiceValue(paymentDetails.total),
       amountInWords,
       currency: paymentDetails.currency || "INR",
     };

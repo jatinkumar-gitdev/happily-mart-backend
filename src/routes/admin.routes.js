@@ -16,13 +16,12 @@ const {
   getPostAnalytics
 } = require("../controllers/admin.controller");
 const { authenticate, authorizeAdmin } = require("../middleware/auth.middleware");
-const { generalLimiter } = require("../middleware/rateLimiter");
-const dealRoutes = require("./deal.routes");
+const { adminLimiter } = require("../middleware/rateLimiter");
 
 const router = express.Router();
 
 // All admin routes require authentication and admin authorization
-router.use(authenticate, authorizeAdmin, generalLimiter);
+router.use(authenticate, authorizeAdmin, adminLimiter);
 
 // User management
 router.get("/users", getAllUsers);

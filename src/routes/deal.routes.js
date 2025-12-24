@@ -11,7 +11,7 @@ const {
 } = require("../controllers/deal.controller");
 const { authenticate } = require("../middleware/auth.middleware");
 const { authorizeAdmin } = require("../middleware/auth.middleware");
-const { generalLimiter } = require("../middleware/rateLimiter");
+const { generalLimiter, adminLimiter } = require("../middleware/rateLimiter");
 
 const router = express.Router();
 
@@ -24,7 +24,7 @@ router.get("/notifications", authenticate, generalLimiter, getDealNotifications)
 router.put("/notifications/:notificationId/read", authenticate, generalLimiter, markNotificationAsRead);
 
 // Admin routes (protected and admin-only)
-router.get("/admin/all", authenticate, authorizeAdmin, generalLimiter, getAllDeals);
-router.get("/admin/analytics", authenticate, authorizeAdmin, generalLimiter, getDealAnalytics);
+router.get("/admin/all", authenticate, authorizeAdmin, adminLimiter, getAllDeals);
+router.get("/admin/analytics", authenticate, authorizeAdmin, adminLimiter, getDealAnalytics);
 
 module.exports = router;

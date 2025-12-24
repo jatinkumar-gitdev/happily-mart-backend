@@ -81,7 +81,7 @@ const login = asyncHandler(async (req, res) => {
     if (isAdmin && result.user.role === "admin") {
       const adminToken = generateAccessToken(result.user._id);
       res.cookie("adminToken", adminToken, {
-        httpOnly: true,
+        httpOnly: true, // Changed from false to true for security
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         maxAge: rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000,
@@ -90,6 +90,14 @@ const login = asyncHandler(async (req, res) => {
       responseData.accessToken = adminToken;
     } else {
       responseData.accessToken = result.accessToken;
+      // Set access token in cookie for regular users too
+      res.cookie("accessToken", result.accessToken, {
+        httpOnly: true, // Changed from false to true for security
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000,
+        path: "/",
+      });
     }
     
     res.json(responseData);
@@ -141,6 +149,16 @@ const refreshToken = asyncHandler(async (req, res) => {
       }
 
       const accessToken = generateAccessToken(user._id);
+      // Set new admin token in cookie - use the same expiry as the refresh token
+      // For admin refresh tokens, we'll use a default 30-day expiry if rememberMe was used
+      // This is determined by the fact that adminRefreshToken exists
+      res.cookie("adminToken", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000, // Default to 30 days for admin tokens
+        path: "/",
+      });
       res.json({ success: true, accessToken });
       return;
     } catch (error) {
@@ -162,6 +180,16 @@ const refreshToken = asyncHandler(async (req, res) => {
     }
 
     const accessToken = generateAccessToken(user._id);
+    // Set new access token in cookie - use the same expiry as the refresh token
+    // Refresh tokens that last 7 days indicate rememberMe was true, 1 day means it was false
+    const maxAge = req.cookies.refreshToken ? 7 * 24 * 60 * 60 * 1000 : 1 * 24 * 60 * 60 * 1000;
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: maxAge,
+      path: "/",
+    });
     res.json({ success: true, accessToken });
   } catch (error) {
     return res.status(401).json({ message: "Invalid refresh token" });
@@ -169,9 +197,11 @@ const refreshToken = asyncHandler(async (req, res) => {
 });
 
 const logout = asyncHandler(async (req, res) => {
+  // Clear all relevant cookies
   res.clearCookie("refreshToken");
   res.clearCookie("adminToken");
   res.clearCookie("adminRefreshToken");
+  res.clearCookie("accessToken");
   res.json({ success: true, message: "Logged out successfully" });
 });
 

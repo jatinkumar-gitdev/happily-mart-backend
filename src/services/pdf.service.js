@@ -2,11 +2,6 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
 
-/**
- * Generate professional PDF invoice for subscription payment
- * @param {Object} invoiceData - Invoice data containing payment details
- * @returns {Promise<Buffer>} PDF buffer
- */
 const generateInvoicePDF = async (invoiceData) => {
   return new Promise((resolve, reject) => {
     try {
@@ -234,7 +229,7 @@ const generateInvoicePDF = async (invoiceData) => {
         .fontSize(9)
         .font("Helvetica")
         .fillColor(secondaryColor)
-        .text(invoiceData.price, rightMargin - 100, yPosition + 6, {
+        .text((invoiceData.price || '').toString().replace(/₹/g, 'Rs. ').replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰ªº⁺⁻⁼⁽⁾]/g, ''), rightMargin - 100, yPosition + 6, {
           width: 90,
           align: "right",
         });
@@ -248,7 +243,7 @@ const generateInvoicePDF = async (invoiceData) => {
         .font("Helvetica")
         .fillColor(darkGray)
         .text("Subtotal:", rightMargin - 200, yPosition)
-        .text(invoiceData.price, rightMargin - 100, yPosition, {
+        .text((invoiceData.price || '').toString().replace(/₹/g, 'Rs. ').replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰ªº⁺⁻⁼⁽⁾]/g, ''), rightMargin - 100, yPosition, {
           width: 90,
           align: "right",
         });
@@ -258,7 +253,7 @@ const generateInvoicePDF = async (invoiceData) => {
       // GST
       doc
         .text("GST (18%):", rightMargin - 200, yPosition)
-        .text(invoiceData.gst, rightMargin - 100, yPosition, {
+        .text((invoiceData.gst || '').toString().replace(/₹/g, 'Rs. ').replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰ªº⁺⁻⁼⁽⁾]/g, ''), rightMargin - 100, yPosition, {
           width: 90,
           align: "right",
         });
@@ -281,7 +276,7 @@ const generateInvoicePDF = async (invoiceData) => {
         .font("Helvetica-Bold")
         .fillColor(primaryColor)
         .text("Total Amount:", rightMargin - 200, yPosition)
-        .text(invoiceData.total, rightMargin - 100, yPosition, {
+        .text((invoiceData.total || '').toString().replace(/₹/g, 'Rs. ').replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰ªº⁺⁻⁼⁽⁾]/g, ''), rightMargin - 100, yPosition, {
           width: 90,
           align: "right",
         });
@@ -363,74 +358,83 @@ const generateInvoicePDF = async (invoiceData) => {
 
       // Company stamp/seal (circular design with text)
       const stampX = leftMargin + 60;
-      const stampY = yPosition + 25;
-      const stampRadius = 28;
+      const stampY = yPosition + 2;
+      const stampRadius = 60;
+
+      doc.image(path.join(__dirname, "../../public/stamp/sign-stamp.png"),
+        stampX - stampRadius,
+        stampY - stampRadius,
+        {
+          width: stampRadius * 2,
+          height: stampRadius * 2,
+        }
+      )
 
       // Outer circle
-      doc
-        .circle(stampX, stampY, stampRadius)
-        .lineWidth(1.5)
-        .strokeColor(primaryColor)
-        .stroke();
+      // doc
+      //   .circle(stampX, stampY, stampRadius)
+      //   .lineWidth(1.5)
+      //   .strokeColor(primaryColor)
+      //   .stroke();
 
       // Inner circle
-      doc
-        .circle(stampX, stampY, stampRadius - 4)
-        .lineWidth(0.8)
-        .strokeColor(primaryColor)
-        .stroke();
+      // doc
+      //   .circle(stampX, stampY, stampRadius - 4)
+      //   .lineWidth(0.8)
+      //   .strokeColor(primaryColor)
+      //   .stroke();
 
       // Stamp text
-      doc
-        .fontSize(6)
-        .fillColor(primaryColor)
-        .font("Helvetica-Bold")
-        .text("HAPPILY MART", stampX - 25, stampY - 16, {
-          width: 50,
-          align: "center",
-        });
+      // doc
+      //   .fontSize(6)
+      //   .fillColor(primaryColor)
+      //   .font("Helvetica-Bold")
+      //   .text("HAPPILY MART", stampX - 25, stampY - 16, {
+      //     width: 50,
+      //     align: "center",
+      //   });
 
-      doc
-        .fontSize(5)
-        .fillColor(darkGray)
-        .font("Helvetica")
-        .text("PRIVATE LIMITED", stampX - 25, stampY - 8, {
-          width: 50,
-          align: "center",
-        });
+      // doc
+      //   .fontSize(5)
+      //   .fillColor(darkGray)
+      //   .font("Helvetica")
+      //   .text("PRIVATE LIMITED", stampX - 25, stampY - 8, {
+      //     width: 50,
+      //     align: "center",
+      //   });
 
-      doc
-        .fontSize(6)
-        .fillColor(primaryColor)
-        .font("Helvetica-Bold")
-        .text("AUTHORIZED", stampX - 25, stampY + 4, {
-          width: 50,
-          align: "center",
-        });
+      // doc
+      //   .fontSize(6)
+      //   .fillColor(primaryColor)
+      //   .font("Helvetica-Bold")
+      //   .text("AUTHORIZED", stampX - 25, stampY + 4, {
+      //     width: 50,
+      //     align: "center",
+      //   });
 
-      doc
-        .fontSize(5)
-        .fillColor(darkGray)
-        .font("Helvetica")
-        .text("SIGNATORY", stampX - 25, stampY + 12, {
-          width: 50,
-          align: "center",
-        });
+      // doc
+      //   .fontSize(5)
+      //   .fillColor(darkGray)
+      //   .font("Helvetica")
+      //   .text("SIGNATORY", stampX - 25, stampY + 12, {
+      //     width: 50,
+      //     align: "center",
+      //   });
 
-      // Authorized signature section
-      const signatureX = rightMargin - 130;
-      doc
-        .fontSize(8)
-        .fillColor(darkGray)
-        .font("Helvetica")
-        .text("Authorized Signature", signatureX, yPosition + 38);
+      // // Authorized signature section
+      // const signatureX = rightMargin - 130;
+      // doc
+      //   .fontSize(8)
+      //   .fillColor(darkGray)
+      //   .font("Helvetica")
+      //   .text("Authorized Signature", signatureX, yPosition + 38);
 
-      doc
-        .strokeColor(darkGray)
-        .lineWidth(0.8)
-        .moveTo(signatureX, yPosition + 36)
-        .lineTo(signatureX + 100, yPosition + 36)
-        .stroke();
+      // doc
+      //   .strokeColor(darkGray)
+      //   .lineWidth(0.8)
+      //   .moveTo(signatureX, yPosition + 36)
+      //   .lineTo(signatureX + 100, yPosition + 36)
+      //   .stroke();
 
       // Final footer line
       yPosition += 60;
