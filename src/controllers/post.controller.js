@@ -974,6 +974,56 @@ const updateDealToggleStatus = asyncHandler(async (req, res) => {
     dealStatus = "Fail";
   }
 
+  // If toggling from Won/Failed back to Pending, handle subscription point deduction
+  let resetDeductionMessage = "";
+  if (post.dealResult && ['Won', 'Failed'].includes(post.dealResult) && dealToggleStatus === 'Pending') {
+    // Deduct 1 subscription point when resetting from Won/Failed status
+    try {
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+      
+      // Check if subscription has expired
+      if (user.subscriptionExpiresAt && new Date() > user.subscriptionExpiresAt) {
+        return res.status(403).json({
+          success: false,
+          message: "Your subscription has expired. Please renew to continue.",
+        });
+      }
+      
+      // Check if user has sufficient credits
+      if (user.credits < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Insufficient credits to reset deal status. You need at least 1 credit to reset a deal.",
+        });
+      }
+      
+      // Deduct 1 credit
+      user.credits -= 1;
+      await user.save();
+      
+      // Record in credits history
+      user.creditsHistory = user.creditsHistory || [];
+      user.creditsHistory.push({
+        amount: 1,
+        type: "used",
+        description: `Reset deal status for post ${id}`,
+        relatedEntity: id,
+        createdAt: new Date(),
+      });
+      await user.save();
+      
+      resetDeductionMessage = "1 subscription point deducted for resetting deal status. ";
+    } catch (creditError) {
+      return res.status(400).json({
+        success: false,
+        message: creditError.message || "Failed to deduct subscription points for reset",
+      });
+    }
+  }
+
   // Update the post
   const updatedPost = await Post.findByIdAndUpdate(
     id,
@@ -999,6 +1049,26 @@ const updateDealToggleStatus = asyncHandler(async (req, res) => {
       console.log(`Updated ${deals.length} deal(s) to ${dealStatus} for post ${id}`);
     } catch (dealError) {
       console.error("Error updating deals for post:", dealError);
+      // Don't fail the request if deal update fails
+    }
+  } else if (dealToggleStatus === 'Pending' && post.dealResult && ['Won', 'Failed'].includes(post.dealResult)) {
+    // If resetting from Won/Failed to Pending, update related deals to reflect reset
+    try {
+      const deals = await Deal.find({ post: id, isActive: true });
+      for (const deal of deals) {
+        // Reset deal status to Ongoing when post deal is reset
+        deal.status = "Ongoing";
+        deal.statusHistory.push({
+          status: "Ongoing",
+          updatedBy: userId,
+          updatedAt: new Date(),
+          notes: `Deal reset to Ongoing due to post deal toggle reset by creator`
+        });
+        await deal.save();
+      }
+      console.log(`Reset ${deals.length} deal(s) to Ongoing for post ${id}`);
+    } catch (dealError) {
+      console.error("Error resetting deals for post:", dealError);
       // Don't fail the request if deal update fails
     }
   }
@@ -1093,18 +1163,35 @@ const updateDealToggleStatus = asyncHandler(async (req, res) => {
       if (deal.unlocker) {
         global.io.to(`user:${deal.unlocker.toString()}`).emit("deal:statusUpdated", {
           postId: id,
+          dealToggleStatus,
           dealResult,
+          postStatus: updatedPost.postStatus,
+          isActive: updatedPost.isActive,
           message: dealResult === "Won" 
-            ? "This deal has been marked as won and is no longer available for unlocking."
-            : "This deal has been marked as failed.",
+            ? "This deal has been marked as won and is no longer available for unlocking." 
+            : dealResult === "Failed"
+            ? "This deal has been marked as failed."
+            : "This deal status has been updated to pending.",
         });
       }
     });
+    
+    // Notify post creator about the update
+    global.io.to(`user:${userId.toString()}`).emit("post:dealStatusChanged", {
+      postId: id,
+      dealToggleStatus,
+      dealResult,
+      postStatus: updatedPost.postStatus,
+      isActive: updatedPost.isActive,
+      message: `Your deal status for post has been updated to ${dealToggleStatus}.`,
+    });
   }
+
+  const message = resetDeductionMessage + "Deal toggle status updated successfully";
 
   res.json({
     success: true,
-    message: "Deal toggle status updated successfully",
+    message,
     post: updatedPost,
     dealResult,
   });
@@ -1182,6 +1269,28 @@ const updatePostValidity = asyncHandler(async (req, res) => {
     },
     { new: true }
   ).populate("author", "name");
+
+  // Update related deals when post is revived
+  if (updatedPost) {
+    try {
+      const deals = await Deal.find({ post: id, isActive: true });
+      for (const deal of deals) {
+        // Reset deal status to Ongoing when post is revived
+        deal.status = "Ongoing";
+        deal.statusHistory.push({
+          status: "Ongoing",
+          updatedBy: userId,
+          updatedAt: new Date(),
+          notes: `Deal reset to Ongoing due to post revival by creator`
+        });
+        await deal.save();
+      }
+      console.log(`Reset ${deals.length} deal(s) to Ongoing after post revival for post ${id}`);
+    } catch (dealError) {
+      console.error("Error resetting deals after post revival:", dealError);
+      // Don't fail the request if deal update fails
+    }
+  }
 
   // Invalidate cache
   for (let i = 1; i <= 10; i++) {

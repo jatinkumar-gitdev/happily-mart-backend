@@ -70,6 +70,32 @@ const schedulePostValidityReminders = () => {
             isActive: false,
           });
 
+          // Handle related deals when post expires
+          try {
+            const Deal = require("../models/Deal.model");
+            const deals = await Deal.find({ 
+              post: post._id, 
+              isActive: true, 
+              status: { $in: ["Contacted", "Ongoing"] } // Only close ongoing deals
+            });
+            
+            for (const deal of deals) {
+              // Mark deal as closed due to post expiration
+              deal.status = "Closed";
+              deal.statusHistory.push({
+                status: "Closed",
+                updatedBy: post.author._id, // Mark as updated by post creator
+                updatedAt: new Date(),
+                notes: `Deal closed due to post expiration`
+              });
+              await deal.save();
+            }
+            
+            console.log(`Closed ${deals.length} deal(s) for expired post ${post._id}`);
+          } catch (dealError) {
+            console.error(`Failed to handle deals for expired post ${post._id}:`, dealError);
+          }
+
           // Notify creator that post expired and can be revived
           if (post.author) {
             try {
